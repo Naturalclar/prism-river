@@ -15,7 +15,7 @@ pnpm install
 pnpm dev
 ```
 
-開いたページに mp3 / wav / m4a / ogg / flac をドロップするだけ。1ファイル＝1トラック。
+開いたページに mp3 / wav / m4a / ogg / opus / flac / webm（音声）をドロップするだけ。1ファイル＝1トラック。実際に読めるかはブラウザの `decodeAudioData` 次第（下の対応表）。
 
 | 操作 | |
 | --- | --- |
@@ -75,7 +75,18 @@ MP3 書き出しの計測（2026-08-26 / ヘッドレス Chromium / 3秒ステ�
 ## 分かっている制約
 
 - **PCM はデコード後 Float32 で保持する。** `長さ(秒) × sampleRate × ch × 4 bytes` なので、10分ステレオ1本で約100MB。トラックが増えるとメモリが先に効く。
-- **`decodeAudioData` の対応形式はブラウザ依存。** 読めない形式はその場で伝える作りにしてある。
+- **`decodeAudioData` の対応形式はブラウザ依存。** 読めない形式・対応外の拡張子は、ファイル名を挙げてその場で伝える作りにしてある。実測した対応表（[#22](https://github.com/Naturalclar/prism-river/issues/22)）:
+
+  | 形式 | Chromium（ヘッドレス・2026-08-26 実測） | Safari (macOS / iOS) | Firefox |
+  | --- | --- | --- | --- |
+  | wav | ✔ | 未計測 | 未計測 |
+  | mp3 | ✔ | 未計測 | 未計測 |
+  | ogg (Vorbis) | ✔ | 未計測 | 未計測 |
+  | webm (Opus) | ✔（自前の webm 書き出しを読み戻して確認） | 未計測 | 未計測 |
+  | m4a (AAC) | 未計測 | 未計測 | 未計測 |
+  | flac | 未計測 | 未計測 | 未計測 |
+
+  Chromium 列は E2E（テスト時にその場生成した音源: WAV は自前エンコーダ、MP3/Ogg は wasm-media-encoders、webm は自アプリの書き出し）で毎 CI 検証される。m4a / flac は権利フリーの生成手段が CI に無いため、実機と手持ち音源で埋める。Safari / Firefox 列も実機待ち（モバイル実機の検証は [#23](https://github.com/Naturalclar/prism-river/issues/23)）。
 - claude.ai の Artifact ビューアで開いた場合のみ、`.wav` の保存がビューア側の拡張子許可リストに阻まれる（ブラウザの制限ではない）。このリポジトリから自前でホストする分には関係しない。
 
 ## これから

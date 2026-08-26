@@ -186,7 +186,7 @@ export function Deck({ snap, savedAt, storeBusy, onSave, onRestore, onDiscard }:
       <input
         type="file"
         ref={picker}
-        accept="audio/*,.wav,.mp3,.m4a,.aac,.ogg,.flac"
+        accept="audio/*,.wav,.mp3,.m4a,.aac,.ogg,.oga,.opus,.flac,.webm,.weba"
         multiple
         hidden
         data-testid="picker"
