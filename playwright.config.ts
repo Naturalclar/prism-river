@@ -13,8 +13,14 @@ export default defineConfig({
   use: {
     baseURL: "http://127.0.0.1:4173",
     launchOptions: {
-      /* ヘッドレスでも AudioContext が即座に走るようにする。 */
-      args: ["--autoplay-policy=no-user-gesture-required"],
+      /* ヘッドレスでも AudioContext が即座に走るようにする。
+         フェイクマイク2つは録音の E2E 用: 権限プロンプトを自動許可し、
+         入力デバイスをトーン生成のフェイクに差し替える（CI でも動く）。 */
+      args: [
+        "--autoplay-policy=no-user-gesture-required",
+        "--use-fake-ui-for-media-stream",
+        "--use-fake-device-for-media-stream",
+      ],
       ...(executablePath ? { executablePath } : {}),
     },
   },

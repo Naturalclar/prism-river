@@ -66,6 +66,11 @@ button{font:inherit; color:inherit; background:none; border:none; cursor:pointer
 .key:disabled{opacity:.38; cursor:not-allowed}
 .key svg{width:15px; height:15px; fill:currentColor}
 .key.lit{background:var(--accent); border-color:var(--accent); color:var(--accent-ink)}
+.key.rec{background:var(--danger); border-color:var(--danger); color:#fff}
+@media (prefers-reduced-motion:no-preference){
+  .key.rec svg{animation:rec-blink 1.2s ease-in-out infinite}
+  @keyframes rec-blink{50%{opacity:.45}}
+}
 
 .clock{
   font-family:"IBM Plex Mono",monospace; font-variant-numeric:tabular-nums;
