@@ -55,13 +55,18 @@ export function Clip({ t, pxPerSec }: { t: TrackView; pxPerSec: number }) {
     e.currentTarget.releasePointerCapture(d.id);
     e.currentTarget.classList.remove("dragging");
     drag.current = null;
-    if (d.moved) engine.commitOffset(t.id);
+    if (d.moved) {
+      engine.commitOffset(t.id);
+    } else {
+      /* 動かさずに離した＝クリック。選択のトグルにする。 */
+      engine.select(t.selected ? null : t.id);
+    }
   };
 
   return (
     <div
       ref={box}
-      className={`clip${t.dimmed ? " off" : ""}`}
+      className={`clip${t.dimmed ? " off" : ""}${t.selected ? " selected" : ""}`}
       style={{ "--tc": t.color, left: t.offset * pxPerSec, width: w } as CSSProperties}
       data-testid="clip"
       onPointerDown={down}

@@ -38,6 +38,8 @@ export type TrackView = {
   duration: number;
   /** ミュート、または他がソロ中で自分はソロでない。 */
   dimmed: boolean;
+  /** クリックで選択中。Delete キーの削除対象。 */
+  selected: boolean;
 };
 
 export type Telemetry = {
@@ -111,6 +113,7 @@ export class Engine {
   private nextHue = 0;
   private masterVol = 0.9;
   private lastRender: AudioBuffer | null = null;
+  private selectedId: string | null = null;
   private auditionSrc: AudioBufferSourceNode | null = null;
   private bouncing = false;
   private message = "音声ファイルを読み込むと計測が始まります。";
@@ -167,6 +170,7 @@ export class Engine {
         offset: t.offset,
         duration: t.buf.duration,
         dimmed: t.mute || (solo && !t.solo),
+        selected: t.id === this.selectedId,
       })),
       pxPerSec: this.pxPerSec,
       playing: this.playing,
@@ -290,9 +294,22 @@ export class Engine {
     this.balance();
   }
 
+  /** クリックでの選択。`null` で解除。トグルは呼び出し側が行う。 */
+  select(id: string | null): void {
+    if (this.selectedId === id) return;
+    this.selectedId = id;
+    this.emit();
+  }
+
+  /** Delete キーから。選択が無ければ何もしない。 */
+  removeSelected(): void {
+    if (this.selectedId) this.remove(this.selectedId);
+  }
+
   remove(id: string): void {
     const t = this.find(id);
     if (!t) return;
+    if (this.selectedId === id) this.selectedId = null;
     this.stopSrc(t);
     try {
       t.gain.disconnect();
