@@ -150,6 +150,14 @@ export function Deck({ snap, savedAt, storeBusy, onSave, onRestore, onDiscard }:
         >
           {snap.webmBusy ? "webm 書き出し中 …" : "webm で書き出す"}
         </button>
+        <button
+          className="ghost"
+          disabled={idle || snap.bouncing || snap.mp3Busy}
+          title="WASM（LAME）でオフラインエンコードする。実時間はかからない"
+          onClick={() => void engine.bounceMp3()}
+        >
+          {snap.mp3Busy ? "MP3 書き出し中 …" : "MP3 で書き出す"}
+        </button>
         {snap.hasRender && (
           <button className="ghost" onClick={() => engine.audition()}>
             {snap.auditioning ? "試聴を止める" : "レンダーを試聴"}

@@ -9,7 +9,9 @@ import {
 } from "../lib/store";
 import { clamp } from "../lib/time";
 import { trimEndTo, trimStartTo } from "../lib/trim";
+import { MP3_KBPS } from "../lib/mp3";
 import { encodeWav } from "../lib/wav";
+import { encodeMp3InWorker } from "./mp3";
 
 /* 先頭3色は騒霊三姉妹。弦=ルナサ / 管=メルラン / 鍵盤=リリカ。
    4本目以降は同系統から外して、隣り合うトラックが混ざらないようにする。 */
@@ -114,6 +116,8 @@ export type Telemetry = {
   offline: string;
   offlineOk: boolean;
   webm: string;
+  /** MP3（LAME / WASM）のエンコード時間と倍率。#20 の計測対象。 */
+  mp3: string;
 };
 
 export type Snapshot = {
@@ -134,6 +138,8 @@ export type Snapshot = {
   recording: boolean;
   /** webm の実時間書き出し中。 */
   webmBusy: boolean;
+  /** MP3（WASM）の書き出し中。 */
+  mp3Busy: boolean;
 };
 
 type Downloads = { save(o: { filename: string; data: Blob }): Promise<void> };
@@ -246,6 +252,7 @@ export class Engine {
   private auditionSrc: AudioBufferSourceNode | null = null;
   private bouncing = false;
   private webmBusy = false;
+  private mp3Busy = false;
   private message = "音声ファイルを読み込むと計測が始まります。";
   private telemetry: Telemetry = {
     sampleRate: "—",
@@ -254,6 +261,7 @@ export class Engine {
     ram: "—",
     offline: "未実行",
     webm: "未実行",
+    mp3: "未実行",
     offlineOk: false,
   };
 
@@ -322,6 +330,7 @@ export class Engine {
       bouncing: this.bouncing,
       recording: this.rec !== null,
       webmBusy: this.webmBusy,
+      mp3Busy: this.mp3Busy,
     };
   }
 
@@ -1276,6 +1285,40 @@ export class Engine {
       rec.start();
       s.start();
     });
+  }
+
+  /**
+   * MP3（LAME / WASM）の書き出し（#20）。オフラインの一括レンダー →
+   * Worker 内の WASM でエンコード。webm（実時間）と違いどちらも実時間より
+   * 速い想定で、**「エンコードを足しても書き出しは数百倍速のままか」を
+   * 実測するのがこの機能の目的**。結果はテレメトリと README に残す。
+   */
+  async bounceMp3(): Promise<void> {
+    const dur = this.total();
+    if (!dur || this.bouncing || this.mp3Busy) return;
+    this.audio();
+    this.mp3Busy = true;
+    this.say("MP3 書き出し: まずミックスをレンダーしています …");
+    try {
+      const { rendered, ms: renderMs } = await this.renderMix(dur);
+      this.say("MP3 書き出し: WASM（LAME）でエンコード中 …");
+      const { bytes, ms: encodeMs } = await encodeMp3InWorker(rendered);
+      const blob = new Blob([bytes], { type: "audio/mpeg" });
+      const rt = (dur / (encodeMs / 1000)).toFixed(0);
+      this.telemetry = { ...this.telemetry, mp3: `${encodeMs.toFixed(0)} ms（約${rt}倍速）` };
+      const size = (blob.size / 1048576).toFixed(2);
+      const ok = await this.deliverBlob(blob, "prism-river-mix.mp3");
+      this.say(
+        ok
+          ? `MP3 を書き出しました: ${dur.toFixed(2)}s / ${size}MB（CBR ${MP3_KBPS}kbps）。レンダー ${renderMs.toFixed(0)}ms + エンコード ${encodeMs.toFixed(0)}ms — エンコードは実時間の約${rt}倍速。`
+          : `MP3 のエンコードは完了（${size}MB / 実時間の約${rt}倍速）。ただしこのビューではファイル保存が使えません。`,
+      );
+    } catch (err) {
+      this.say(`MP3 の書き出しに失敗しました: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      this.mp3Busy = false;
+      this.emit();
+    }
   }
 
   /** WAV 以外の汎用保存。ビューア内なら downloads capability、素なら通常ダウンロード。 */
