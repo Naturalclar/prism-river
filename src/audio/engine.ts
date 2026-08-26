@@ -95,6 +95,7 @@ export type Telemetry = {
   ram: string;
   offline: string;
   offlineOk: boolean;
+  webm: string;
 };
 
 export type Snapshot = {
@@ -112,6 +113,8 @@ export type Snapshot = {
   auditioning: boolean;
   bouncing: boolean;
   recording: boolean;
+  /** webm の実時間書き出し中。 */
+  webmBusy: boolean;
 };
 
 type Downloads = { save(o: { filename: string; data: Blob }): Promise<void> };
@@ -124,6 +127,9 @@ declare global {
 }
 
 const AUDIO_EXT = /\.(mp3|wav|m4a|aac|ogg|flac)$/i;
+
+/** webm 書き出しのコンテナ。MediaRecorder の対応はブラウザ依存なので使用前に確認する。 */
+const WEBM_MIME = "audio/webm;codecs=opus";
 
 function makeBiquad(
   ctx: BaseAudioContext,
@@ -217,6 +223,7 @@ export class Engine {
   private fxId: string | null = null;
   private auditionSrc: AudioBufferSourceNode | null = null;
   private bouncing = false;
+  private webmBusy = false;
   private message = "音声ファイルを読み込むと計測が始まります。";
   private telemetry: Telemetry = {
     sampleRate: "—",
@@ -224,6 +231,7 @@ export class Engine {
     decoded: "—",
     ram: "—",
     offline: "未実行",
+    webm: "未実行",
     offlineOk: false,
   };
 
@@ -289,6 +297,7 @@ export class Engine {
       auditioning: this.auditionSrc !== null,
       bouncing: this.bouncing,
       recording: this.rec !== null,
+      webmBusy: this.webmBusy,
     };
   }
 
@@ -1039,54 +1048,14 @@ export class Engine {
   async bounce(): Promise<void> {
     const dur = this.total();
     if (!dur || this.bouncing) return;
-    const ctx = this.audio();
+    this.audio();
     this.bouncing = true;
     this.say("オフラインでミックスを描画中 …");
 
     /* 失敗しても bouncing を必ず戻す。長尺では encodeWav のメモリ確保が
        落ちることが現実にあり、ここで戻さないと書き出しボタンが死んだままになる。 */
     try {
-      const t0 = performance.now();
-      const sr = ctx.sampleRate;
-      const off = new OfflineAudioContext(2, Math.ceil(dur * sr) + sr * 0.1, sr);
-      const mg = off.createGain();
-      mg.gain.value = this.masterVol;
-      mg.connect(off.destination);
-      const solo = this.tracks.some((t) => t.solo);
-      for (const t of this.tracks) {
-        if (t.mute || (solo && !t.solo)) continue;
-        const g = off.createGain();
-        const p = off.createStereoPanner();
-        const s = off.createBufferSource();
-        g.gain.value = t.vol;
-        p.pan.value = t.panv;
-        s.buffer = t.buf;
-        const eff = t.trimEnd - t.trimStart;
-        if (t.fadeIn > 0 || t.fadeOut > 0) {
-          const f = off.createGain();
-          this.scheduleFades(f.gain, t.offset, eff, t.fadeIn, t.fadeOut);
-          s.connect(f);
-          f.connect(g);
-        } else {
-          s.connect(g);
-        }
-        /* エフェクトはプレーンなデータからオフライン側のノードを組み直す。
-           素通し（EQ 全バンド 0dB・コンプ OFF）のときは挟まない。 */
-        const chain = buildFxChain(off, t.fx);
-        if (chain) {
-          g.connect(chain.input);
-          chain.output.connect(p);
-        } else {
-          g.connect(p);
-        }
-        p.connect(mg);
-        s.start(t.offset, t.trimStart, eff);
-      }
-      const rendered = await off.startRendering();
-      const ms = performance.now() - t0;
-      this.telemetry = { ...this.telemetry, offline: `${ms.toFixed(0)} ms`, offlineOk: true };
-      this.lastRender = rendered;
-
+      const { rendered, ms } = await this.renderMix(dur);
       const wav = encodeWav(rendered);
       const rt = (dur / (ms / 1000)).toFixed(0);
       const size = (wav.size / 1048576).toFixed(1);
@@ -1100,6 +1069,155 @@ export class Engine {
     } finally {
       this.bouncing = false;
       this.emit();
+    }
+  }
+
+  /** ミックスをオフラインで一括レンダーして lastRender に置く。WAV / webm 共用。 */
+  private async renderMix(dur: number): Promise<{ rendered: AudioBuffer; ms: number }> {
+    const ctx = this.audio();
+    const t0 = performance.now();
+    const sr = ctx.sampleRate;
+    const off = new OfflineAudioContext(2, Math.ceil(dur * sr) + sr * 0.1, sr);
+    const mg = off.createGain();
+    mg.gain.value = this.masterVol;
+    mg.connect(off.destination);
+    const solo = this.tracks.some((t) => t.solo);
+    for (const t of this.tracks) {
+      if (t.mute || (solo && !t.solo)) continue;
+      const g = off.createGain();
+      const p = off.createStereoPanner();
+      const s = off.createBufferSource();
+      g.gain.value = t.vol;
+      p.pan.value = t.panv;
+      s.buffer = t.buf;
+      const eff = t.trimEnd - t.trimStart;
+      if (t.fadeIn > 0 || t.fadeOut > 0) {
+        const f = off.createGain();
+        this.scheduleFades(f.gain, t.offset, eff, t.fadeIn, t.fadeOut);
+        s.connect(f);
+        f.connect(g);
+      } else {
+        s.connect(g);
+      }
+      /* エフェクトはプレーンなデータからオフライン側のノードを組み直す。
+         素通し（EQ 全バンド 0dB・コンプ OFF）のときは挟まない。 */
+      const chain = buildFxChain(off, t.fx);
+      if (chain) {
+        g.connect(chain.input);
+        chain.output.connect(p);
+      } else {
+        g.connect(p);
+      }
+      p.connect(mg);
+      s.start(t.offset, t.trimStart, eff);
+    }
+    const rendered = await off.startRendering();
+    const ms = performance.now() - t0;
+    this.telemetry = { ...this.telemetry, offline: `${ms.toFixed(0)} ms`, offlineOk: true };
+    this.lastRender = rendered;
+    return { rendered, ms };
+  }
+
+  /**
+   * webm（Opus）の書き出し。オフラインの一括レンダーと違い、レンダー結果を
+   * MediaStreamAudioDestinationNode へ等速再生して MediaRecorder で録るので
+   * **仕様上、実時間かかる**。スピーカーには出さない（無音で録れる）。
+   */
+  async bounceWebm(): Promise<void> {
+    const dur = this.total();
+    if (!dur || this.bouncing || this.webmBusy) return;
+    if (typeof MediaRecorder === "undefined" || !MediaRecorder.isTypeSupported(WEBM_MIME)) {
+      this.say("このブラウザは webm (Opus) の録音に対応していません。WAV の書き出しを使ってください。");
+      return;
+    }
+    const ctx = this.audio();
+    if (ctx.state === "suspended") await ctx.resume();
+    this.webmBusy = true;
+    this.say("webm 書き出し: まずミックスをレンダーしています …");
+    try {
+      const { rendered } = await this.renderMix(dur);
+      const blob = await this.recordToWebm(ctx, rendered);
+      const size = (blob.size / 1048576).toFixed(1);
+      this.telemetry = { ...this.telemetry, webm: `${rendered.duration.toFixed(1)} s（実時間）` };
+      const ok = await this.deliverBlob(blob, "prism-river-mix.webm");
+      this.say(
+        ok
+          ? `webm を書き出しました: ${dur.toFixed(2)}s / ${size}MB（Opus・実時間の1.0倍。WAV の一括レンダーと違い実時間かかるのは仕様）。`
+          : `webm のレンダーは完了（${size}MB）。ただしこのビューではファイル保存が使えません。`,
+      );
+    } catch (err) {
+      this.say(`webm の書き出しに失敗しました: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      this.webmBusy = false;
+      this.emit();
+    }
+  }
+
+  /** レンダー済みバッファを等速再生しながら録る。進捗はログに出す。 */
+  private recordToWebm(ctx: AudioContext, buf: AudioBuffer): Promise<Blob> {
+    return new Promise((resolve, reject) => {
+      const dest = ctx.createMediaStreamDestination();
+      const s = ctx.createBufferSource();
+      s.buffer = buf;
+      s.connect(dest);
+      const rec = new MediaRecorder(dest.stream, { mimeType: WEBM_MIME });
+      const chunks: Blob[] = [];
+      const t0 = ctx.currentTime;
+      const timer = setInterval(() => {
+        const el = Math.min(buf.duration, ctx.currentTime - t0);
+        this.say(`webm 書き出し中（実時間）… ${el.toFixed(0)}s / ${buf.duration.toFixed(0)}s`);
+      }, 1000);
+      const finish = (fn: () => void) => {
+        clearInterval(timer);
+        try {
+          dest.disconnect();
+        } catch {
+          /* 既に切れている */
+        }
+        fn();
+      };
+      rec.addEventListener("dataavailable", (e) => {
+        if (e.data.size) chunks.push(e.data);
+      });
+      rec.addEventListener("error", () => finish(() => reject(new Error("MediaRecorder が失敗しました"))));
+      rec.addEventListener("stop", () => finish(() => resolve(new Blob(chunks, { type: WEBM_MIME }))));
+      s.addEventListener(
+        "ended",
+        () => {
+          if (rec.state !== "inactive") rec.stop();
+        },
+        { once: true },
+      );
+      rec.start();
+      s.start();
+    });
+  }
+
+  /** WAV 以外の汎用保存。ビューア内なら downloads capability、素なら通常ダウンロード。 */
+  private async deliverBlob(blob: Blob, filename: string): Promise<boolean> {
+    if (!window.claude) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+      return true;
+    }
+    let dl: Downloads | null = null;
+    try {
+      dl = await window.claude.use("downloads");
+    } catch {
+      dl = null;
+    }
+    if (!dl) return false;
+    try {
+      await dl.save({ filename, data: blob });
+      return true;
+    } catch {
+      return false;
     }
   }
 
