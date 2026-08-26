@@ -152,6 +152,15 @@ declare global {
 }
 
 const AUDIO_EXT = /\.(mp3|wav|m4a|aac|ogg|flac)$/i;
+/* 動画コンテナも受け入れる（#31）。decodeAudioData はバイト列から音声トラック
+   だけをデコードできる場合がある（ブラウザとコンテナ依存）ので、入口では
+   弾かずに既存のデコード経路へ流し、ダメなら動画由来と分かる文言で伝える。 */
+const VIDEO_EXT = /\.(mp4|mov|m4v|webm|mkv)$/i;
+
+/** エラー文言の分岐用。音声の取り込みか、動画からの音声取り出しか。 */
+function isVideoFile(f: File): boolean {
+  return f.type.startsWith("video/") || VIDEO_EXT.test(f.name);
+}
 
 /** webm 書き出しのコンテナ。MediaRecorder の対応はブラウザ依存なので使用前に確認する。 */
 const WEBM_MIME = "audio/webm;codecs=opus";
@@ -391,10 +400,10 @@ export class Engine {
 
   async ingest(files: ArrayLike<File>): Promise<void> {
     const list = Array.from(files).filter(
-      (f) => f.type.startsWith("audio/") || AUDIO_EXT.test(f.name),
+      (f) => f.type.startsWith("audio/") || AUDIO_EXT.test(f.name) || isVideoFile(f),
     );
     if (!list.length) {
-      this.say("音声ファイルが見つかりませんでした。");
+      this.say("音声（または音声つき動画）ファイルが見つかりませんでした。");
       return;
     }
     const ctx = this.audio();
@@ -419,11 +428,16 @@ export class Engine {
       const ms = performance.now() - t0;
       this.decodeTotal += ms;
       this.push(f.name.replace(/\.[^.]+$/, ""), f.name, f, buf, ms);
+      const via = isVideoFile(f) ? "動画から音声のみ取り込み / " : "";
       this.say(
-        `${f.name} — ${buf.duration.toFixed(2)}s / ${buf.numberOfChannels}ch / ${buf.sampleRate}Hz / デコード ${ms.toFixed(0)}ms`,
+        `${f.name} — ${via}${buf.duration.toFixed(2)}s / ${buf.numberOfChannels}ch / ${buf.sampleRate}Hz / デコード ${ms.toFixed(0)}ms`,
       );
     } catch {
-      this.say(`${f.name} をデコードできませんでした（この形式はブラウザが対応していません）`);
+      this.say(
+        isVideoFile(f)
+          ? `${f.name} から音声を取り出せませんでした（このブラウザはこの動画コンテナの音声デコードに対応していません）`
+          : `${f.name} をデコードできませんでした（この形式はブラウザが対応していません）`,
+      );
     }
   }
 

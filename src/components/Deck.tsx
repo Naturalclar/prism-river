@@ -132,7 +132,11 @@ export function Deck({ snap, savedAt, storeBusy, onSave, onRestore, onDiscard }:
       <div className="spacer" />
 
       <div className="acts">
-        <button className="ghost" onClick={() => picker.current?.click()}>
+        <button
+          className="ghost"
+          title="音声ファイルのほか、音声つき動画（mp4 / mov / webm 等）からも音声トラックを取り込める"
+          onClick={() => picker.current?.click()}
+        >
           音声を追加
         </button>
         <button
@@ -186,7 +190,7 @@ export function Deck({ snap, savedAt, storeBusy, onSave, onRestore, onDiscard }:
       <input
         type="file"
         ref={picker}
-        accept="audio/*,.wav,.mp3,.m4a,.aac,.ogg,.flac"
+        accept="audio/*,video/*,.wav,.mp3,.m4a,.aac,.ogg,.flac,.mp4,.mov,.m4v,.webm,.mkv"
         multiple
         hidden
         data-testid="picker"
