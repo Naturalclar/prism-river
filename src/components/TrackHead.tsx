@@ -5,7 +5,16 @@ import { panLabel } from "../lib/time";
 
 export function TrackHead({ t }: { t: TrackView }) {
   return (
-    <div className="head" style={{ "--tc": t.color } as CSSProperties} data-testid="track-head">
+    <div
+      className={`head${t.selected ? " selected" : ""}`}
+      style={{ "--tc": t.color } as CSSProperties}
+      data-testid="track-head"
+      onClick={(e) => {
+        /* S / M / ✕ やスライダーの操作では選択を動かさない。 */
+        if ((e.target as Element).closest("button, input")) return;
+        engine.select(t.selected ? null : t.id);
+      }}
+    >
       <div className="head-row">
         <div className="head-name" title={t.name}>
           {t.name}

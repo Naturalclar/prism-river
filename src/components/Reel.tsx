@@ -36,6 +36,11 @@ export function Reel({ snap }: { snap: Snapshot }) {
       ref={reel}
       data-testid="reel"
       onScroll={() => engine.emitFrame()}
+      onPointerDown={(e) => {
+        /* クリップとルーラー以外＝空き地のクリックで選択を解除する。 */
+        const el = e.target as Element;
+        if (!el.closest(".clip") && !el.closest(".ruler")) engine.select(null);
+      }}
     >
       <Ruler width={width} pxPerSec={snap.pxPerSec} />
 

@@ -127,6 +127,7 @@ input[type=range]::-moz-range-thumb{
 .lanes{position:relative}
 
 /* track header */
+.head.selected{background:var(--accent-soft)}
 .head{
   height:88px; border-bottom:1px solid var(--line); padding:8px 10px;
   display:flex; flex-direction:column; gap:6px; position:relative;
@@ -161,6 +162,7 @@ input[type=range]::-moz-range-thumb{
   cursor:grab; touch-action:none;
 }
 .clip.dragging{cursor:grabbing; box-shadow:0 0 0 2px var(--accent)}
+.clip.selected{box-shadow:0 0 0 2px var(--accent)}
 .clip .wave{position:absolute; inset:0; display:flex; pointer-events:none}
 .clip canvas{display:block}
 .clip .tag{

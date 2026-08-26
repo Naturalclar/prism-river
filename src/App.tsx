@@ -16,11 +16,17 @@ export default function App() {
   const snap = useSyncExternalStore(engine.subscribe, engine.getSnapshot);
   const [armed, setArmed] = useState(false);
 
-  /* Space で再生／一時停止。フォーム上のキー入力は横取りしない。 */
+  /* Space で再生／一時停止、Delete / Backspace で選択中トラックの削除。
+     フォーム上のキー入力は横取りしない。 */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as Element | null;
       if (target?.matches?.("input, button")) return;
+      if (e.code === "Delete" || e.code === "Backspace") {
+        e.preventDefault();
+        engine.removeSelected();
+        return;
+      }
       if (e.code !== "Space") return;
       e.preventDefault();
       engine.toggle();

@@ -164,6 +164,30 @@ test("保存に失敗しても書き出しボタンは無効のままになら�
      修正前は use() の reject が unhandled rejection になっていた。 */
 });
 
+test("クリックで選択したトラックを Delete で削除できる", async ({ page }) => {
+  await load(page, [makeTone("sel1.wav", 440), makeTone("sel2.wav", 330)]);
+
+  /* クリップのクリックで選択（枠が付く）。 */
+  await page.getByTestId("clip").first().click();
+  await expect(page.getByTestId("clip").first()).toHaveClass(/selected/);
+  await expect(page.getByTestId("track-head").first()).toHaveClass(/selected/);
+
+  /* Delete で選択中のトラックだけ消える。 */
+  await page.keyboard.press("Delete");
+  await expect(page.getByTestId("track-head")).toHaveCount(1);
+  await expect(page.getByTestId("track-head")).toContainText("sel2");
+
+  /* 選択が無い状態の Delete では何も起きない。 */
+  await page.keyboard.press("Delete");
+  await expect(page.getByTestId("track-head")).toHaveCount(1);
+
+  /* 同じトラックの再クリックで選択が外れる。 */
+  await page.getByTestId("clip").click();
+  await expect(page.getByTestId("clip")).toHaveClass(/selected/);
+  await page.getByTestId("clip").click();
+  await expect(page.getByTestId("clip")).not.toHaveClass(/selected/);
+});
+
 test("トラックを消すと空の案内に戻る", async ({ page }) => {
   await load(page, [makeTone("gone.wav", 440)]);
   await page.getByRole("button", { name: /削除/ }).click();
