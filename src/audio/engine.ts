@@ -84,6 +84,7 @@ export type Snapshot = {
   hasRender: boolean;
   auditioning: boolean;
   bouncing: boolean;
+  recording: boolean;
 };
 
 type Downloads = { save(o: { filename: string; data: Blob }): Promise<void> };
@@ -124,6 +125,17 @@ export class Engine {
   } | null = null;
 
   private tracks: Track[] = [];
+  /** 録音セッション。マイクのストリームと入力レベル用のアナライザを持つ。 */
+  private rec: {
+    stream: MediaStream;
+    recorder: MediaRecorder;
+    chunks: Blob[];
+    source: MediaStreamAudioSourceNode;
+    analyser: AnalyserNode;
+    buf: Uint8Array<ArrayBuffer>;
+  } | null = null;
+  private recRaf = 0;
+  private recCount = 0;
   private pxPerSec = 70;
   private playing = false;
   private looping = false;
@@ -206,6 +218,7 @@ export class Engine {
       hasRender: this.lastRender !== null,
       auditioning: this.auditionSrc !== null,
       bouncing: this.bouncing,
+      recording: this.rec !== null,
     };
   }
 
@@ -282,7 +295,7 @@ export class Engine {
       const buf = await ctx.decodeAudioData(bytes);
       const ms = performance.now() - t0;
       this.decodeTotal += ms;
-      this.push(f.name, f, buf, ms);
+      this.push(f.name.replace(/\.[^.]+$/, ""), f.name, f, buf, ms);
       this.say(
         `${f.name} — ${buf.duration.toFixed(2)}s / ${buf.numberOfChannels}ch / ${buf.sampleRate}Hz / デコード ${ms.toFixed(0)}ms`,
       );
@@ -291,7 +304,7 @@ export class Engine {
     }
   }
 
-  private push(srcName: string, srcBytes: Blob, buf: AudioBuffer, ms: number): Track {
+  private push(name: string, srcName: string, srcBytes: Blob, buf: AudioBuffer, ms: number): Track {
     const ctx = this.audio();
     const gain = ctx.createGain();
     const pan = ctx.createStereoPanner();
@@ -299,7 +312,7 @@ export class Engine {
     if (this.master) pan.connect(this.master);
     const t: Track = {
       id: `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`,
-      name: srcName.replace(/\.[^.]+$/, ""),
+      name,
       srcName,
       srcBytes,
       buf,
@@ -443,8 +456,7 @@ export class Engine {
       const buf = await ctx.decodeAudioData(bytes);
       const ms = performance.now() - t0;
       this.decodeTotal += ms;
-      const t = this.push(m.srcName, blobs[i], buf, ms);
-      t.name = m.name;
+      const t = this.push(m.name, m.srcName, blobs[i], buf, ms);
       t.vol = clamp(m.vol, 0, 1.4);
       t.panv = clamp(m.panv, -1, 1);
       t.pan.pan.value = t.panv;
@@ -466,6 +478,111 @@ export class Engine {
     this.refreshTelemetry();
     this.emit();
   }
+
+  /* ── 録音 ──────────────────────────────────────────────────────────── */
+
+  /**
+   * 録音ボタンから。開始はユーザー操作起点で呼ぶこと（権限プロンプトの都合）。
+   * 録った音声も既存トラックと同じく端末から出ない。
+   */
+  toggleRecord(): void {
+    if (this.rec) {
+      /* stop() の完了は recorder の "stop" イベントで受ける。 */
+      if (this.rec.recorder.state !== "inactive") this.rec.recorder.stop();
+      return;
+    }
+    void this.startRecording();
+  }
+
+  private async startRecording(): Promise<void> {
+    if (this.rec) return;
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      this.say("このブラウザではマイク録音（getUserMedia / MediaRecorder）が使えません。");
+      return;
+    }
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      const name = err instanceof DOMException ? err.name : "";
+      if (name === "NotAllowedError" || name === "SecurityError") {
+        this.say(
+          "マイクの使用が許可されませんでした。ブラウザのサイト設定でマイクを許可してから、もう一度 ● を押してください。",
+        );
+      } else if (name === "NotFoundError" || name === "OverconstrainedError") {
+        this.say("マイクが見つかりませんでした。入力デバイスの接続を確認してください。");
+      } else {
+        this.say(`マイクを開けませんでした: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
+
+    const ctx = this.audio();
+    if (ctx.state === "suspended") void ctx.resume();
+    /* 入力レベルの監視用。出力へは繋がない（スピーカーへ返すとハウリングする）。 */
+    const source = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    source.connect(analyser);
+
+    const recorder = new MediaRecorder(stream);
+    const chunks: Blob[] = [];
+    recorder.addEventListener("dataavailable", (e) => {
+      if (e.data.size) chunks.push(e.data);
+    });
+    /* ボタンからの停止も、デバイス切断などによる予期しない停止もここで受ける。 */
+    recorder.addEventListener("stop", () => void this.finishRecording(), { once: true });
+
+    this.rec = { stream, recorder, chunks, source, analyser, buf: new Uint8Array(analyser.fftSize) };
+    recorder.start();
+    this.recTick();
+    this.say("録音中 … もう一度 ● を押すと停止してトラックになります。");
+  }
+
+  /** 停止後の後始末とトラック化。Blob 以降は読み込みと同じ decode → push の経路。 */
+  private async finishRecording(): Promise<void> {
+    const rec = this.rec;
+    if (!rec) return;
+    this.rec = null;
+    cancelAnimationFrame(this.recRaf);
+    for (const trk of rec.stream.getTracks()) trk.stop();
+    try {
+      rec.source.disconnect();
+    } catch {
+      /* 既に切れている */
+    }
+
+    const blob = new Blob(rec.chunks, { type: rec.recorder.mimeType || "audio/webm" });
+    if (!blob.size) {
+      this.say("録音データが空でした。マイクの入力レベルを確認してください。");
+      return;
+    }
+    this.say("録音をデコード中 …");
+    try {
+      const bytes = await blob.arrayBuffer();
+      const t0 = performance.now();
+      const buf = await this.audio().decodeAudioData(bytes);
+      const ms = performance.now() - t0;
+      this.decodeTotal += ms;
+      const name = `録音 ${++this.recCount}`;
+      /* 保存（#18）用に、エンコード済みの録音チャンクを元ファイルとして持たせる。 */
+      const ext = blob.type.includes("ogg") ? "ogg" : blob.type.includes("mp4") ? "m4a" : "webm";
+      this.push(name, `${name}.${ext}`, blob, buf, ms);
+      this.refreshTelemetry();
+      this.say(
+        `${name} — ${buf.duration.toFixed(2)}s / ${buf.numberOfChannels}ch / ${buf.sampleRate}Hz / デコード ${ms.toFixed(0)}ms`,
+      );
+    } catch {
+      this.say("録音をデコードできませんでした（この形式はブラウザが対応していません）");
+    }
+  }
+
+  /** 録音中は再生していなくてもメーターを動かしたいので、専用の rAF を回す。 */
+  private recTick = (): void => {
+    if (!this.rec) return;
+    if (!this.playing) this.emitFrame();
+    this.recRaf = requestAnimationFrame(this.recTick);
+  };
 
   /* ── ミキサー ──────────────────────────────────────────────────────── */
 
@@ -750,11 +867,15 @@ export class Engine {
     this.raf = requestAnimationFrame(this.tick);
   };
 
-  /** L/R の RMS。0〜1。 */
+  /** L/R の RMS。0〜1。録音中はマイクの入力レベルも重ねる（無音録りに気づくため）。 */
   levels(): [number, number] {
     const a = this.analyser;
-    if (!a) return [0, 0];
-    return [rms(a.L, a.bL), rms(a.R, a.bR)];
+    const out: [number, number] = a ? [rms(a.L, a.bL), rms(a.R, a.bR)] : [0, 0];
+    if (this.rec) {
+      const v = rms(this.rec.analyser, this.rec.buf);
+      return [Math.max(out[0], v), Math.max(out[1], v)];
+    }
+    return out;
   }
 
   /* ── 書き出し ──────────────────────────────────────────────────────── */

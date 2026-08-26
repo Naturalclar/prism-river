@@ -64,6 +64,17 @@ export function Deck({ snap, savedAt, storeBusy, onSave, onRestore, onDiscard }:
             <path d="M4 4h7v2l3-3-3-3v2H2v5h2V4zm8 8H5v-2l-3 3 3 3v-2h9V9h-2v3z" />
           </svg>
         </button>
+        <button
+          className={`key${snap.recording ? " rec" : ""}`}
+          title={snap.recording ? "録音を停止してトラックにする" : "マイクから録音"}
+          aria-label={snap.recording ? "録音を停止" : "マイクから録音"}
+          aria-pressed={snap.recording}
+          onClick={() => engine.toggleRecord()}
+        >
+          <svg viewBox="0 0 16 16">
+            <circle cx="8" cy="8" r="4.5" />
+          </svg>
+        </button>
       </div>
 
       <Clock />

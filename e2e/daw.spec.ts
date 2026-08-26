@@ -314,6 +314,29 @@ test("プロジェクトを保存してリロード後に復元できる", async
   expect((await download).suggestedFilename()).toBe("prism-river-mix.wav");
 });
 
+/* フェイクマイク（--use-fake-device-for-media-stream）でトーンが入力される。
+   録音開始 → 停止でトラックが1本増え、既存の読み込み経路（decode → push）に乗る。 */
+test("マイク録音を停止するとトラックが1本増える", async ({ page }) => {
+  await page.getByRole("button", { name: "マイクから録音", exact: true }).click();
+  await expect(page.getByTestId("log")).toContainText("録音中");
+
+  /* 実時間でしか録れないので、内容が入るぶんだけ待つ。 */
+  await page.waitForTimeout(700);
+  await page.getByRole("button", { name: "録音を停止", exact: true }).click();
+
+  await expect(page.getByTestId("track-head")).toHaveCount(1, { timeout: 10_000 });
+  await expect(page.getByTestId("track-head")).toContainText("録音 1");
+  await expect(page.getByTestId("probe-trk")).toHaveText("1");
+  await expect(page.getByTestId("log")).toContainText("録音 1 —");
+  await expect(page.getByTestId("clip")).toHaveCount(1);
+
+  /* 録音したトラックもそのまま書き出しに乗る。 */
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "ミックスを書き出す", exact: true }).click();
+  await expect(page.getByTestId("log")).toContainText("書き出しました", { timeout: 15_000 });
+  expect((await download).suggestedFilename()).toBe("prism-river-mix.wav");
+});
+
 test("保存データを消すとリロード後は素の初期状態に戻る", async ({ page }) => {
   await load(page, [makeTone("wipe.wav", 440)]);
   await page.getByRole("button", { name: "プロジェクトを保存", exact: true }).click();
@@ -326,6 +349,21 @@ test("保存データを消すとリロード後は素の初期状態に戻る",
   await expect(page.getByRole("button", { name: "前回を復元" })).toHaveCount(0);
   await expect(page.getByText("音声ファイルをここへドロップ")).toBeVisible();
   await expect(page.getByTestId("log")).not.toContainText("前回保存したプロジェクト");
+});
+
+test("マイクの権限が拒否されたら分かるメッセージが出る", async ({ page }) => {
+  await page.addInitScript(() => {
+    navigator.mediaDevices.getUserMedia = () =>
+      Promise.reject(new DOMException("Permission denied", "NotAllowedError"));
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "マイクから録音", exact: true }).click();
+  await expect(page.getByTestId("log")).toContainText("マイクの使用が許可されませんでした");
+  /* 録音状態にはならず、ボタンは再試行できる姿のまま。 */
+  await expect(page.getByRole("button", { name: "マイクから録音", exact: true })).toBeVisible();
+  await expect(page.getByTestId("track-head")).toHaveCount(0);
+  /* afterEach の「ページ例外ゼロ」も検証対象: reject を握り損ねると
+     unhandled rejection がここで出る。 */
 });
 
 test("トラックを消すと空の案内に戻る", async ({ page }) => {
