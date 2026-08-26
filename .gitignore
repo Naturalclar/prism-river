@@ -9,3 +9,7 @@ dist/
 *.wav
 *.m4a
 *.flac
+
+# Playwright
+/test-results/
+/playwright-report/

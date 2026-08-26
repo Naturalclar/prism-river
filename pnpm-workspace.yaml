@@ -1,0 +1,3 @@
+# esbuild はプラットフォーム別バイナリを postinstall で取りに行くので、ここで明示的に許可する。
+allowBuilds:
+  esbuild: true
