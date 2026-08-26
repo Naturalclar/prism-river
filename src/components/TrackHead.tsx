@@ -3,7 +3,7 @@ import { engine } from "../audio/instance";
 import type { TrackView } from "../audio/engine";
 import { panLabel } from "../lib/time";
 
-export function TrackHead({ t }: { t: TrackView }) {
+export function TrackHead({ t, fxOpen }: { t: TrackView; fxOpen: boolean }) {
   return (
     <div
       className={`head${t.selected ? " selected" : ""}`}
@@ -36,6 +36,15 @@ export function TrackHead({ t }: { t: TrackView }) {
           onClick={() => engine.toggleMute(t.id)}
         >
           M
+        </button>
+        <button
+          className="tog"
+          aria-pressed={fxOpen}
+          title="エフェクト (EQ / コンプ)"
+          aria-label={`${t.name} のエフェクト`}
+          onClick={() => engine.toggleFxPanel(t.id)}
+        >
+          FX
         </button>
         <button
           className="tog"

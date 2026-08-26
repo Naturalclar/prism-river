@@ -11,6 +11,24 @@ export const HUE = ["#6E8FD4", "#E8735A", "#A585D6", "#E0A93B", "#63BE8C", "#D66
 export const LANE_H = 88;
 export const CLIP_PAD = 6;
 
+/* EQ の固定周波数。まずは3バンドで十分（低棚 / ピーキング / 高棚）。 */
+const EQ_LOW_HZ = 200;
+const EQ_MID_HZ = 1000;
+const EQ_MID_Q = 1.0;
+const EQ_HIGH_HZ = 4000;
+
+/** トラックエフェクトのパラメータ。プレーンなデータで、ノードとは分離。 */
+export type TrackFx = {
+  /** 各バンドのゲイン（dB）。0 で素通し。 */
+  eq: { low: number; mid: number; high: number };
+  comp: { on: boolean; threshold: number; ratio: number; attack: number; release: number };
+};
+
+const defaultFx = (): TrackFx => ({
+  eq: { low: 0, mid: 0, high: 0 },
+  comp: { on: false, threshold: -24, ratio: 4, attack: 0.003, release: 0.25 },
+});
+
 export type Track = {
   id: string;
   name: string;
@@ -31,6 +49,12 @@ export type Track = {
   fadeOut: number;
   /** 再生セッションごとに作るフェード用 GainNode。停止時に外す。 */
   fade: GainNode | null;
+  fx: TrackFx;
+  /** リアルタイム側の常設エフェクトノード。パラメータはライブで触る。 */
+  fxLow: BiquadFilterNode;
+  fxMid: BiquadFilterNode;
+  fxHigh: BiquadFilterNode;
+  fxComp: DynamicsCompressorNode;
   color: string;
   decodeMs: number;
   peaks: Peaks | null;
@@ -53,6 +77,7 @@ export type TrackView = {
   /** フェードの長さ（秒）。 */
   fadeIn: number;
   fadeOut: number;
+  fx: TrackFx;
   /** ミュート、または他がソロ中で自分はソロでない。 */
   dimmed: boolean;
   /** クリックで選択中。Delete キーの削除対象。 */
@@ -75,6 +100,8 @@ export type Snapshot = {
   looping: boolean;
   duration: number;
   masterVol: number;
+  /** FX パネルを開いているトラック。無ければ null。 */
+  fxId: string | null;
   telemetry: Telemetry;
   message: string;
   hasRender: boolean;
@@ -92,6 +119,46 @@ declare global {
 }
 
 const AUDIO_EXT = /\.(mp3|wav|m4a|aac|ogg|flac)$/i;
+
+function makeBiquad(
+  ctx: BaseAudioContext,
+  type: BiquadFilterType,
+  freq: number,
+  gain: number,
+): BiquadFilterNode {
+  const b = ctx.createBiquadFilter();
+  b.type = type;
+  b.frequency.value = freq;
+  b.gain.value = gain;
+  if (type === "peaking") b.Q.value = EQ_MID_Q;
+  return b;
+}
+
+/** fx のデータからノード列を組む（bounce のオフライン側用）。素通しなら null。 */
+function buildFxChain(
+  ctx: BaseAudioContext,
+  fx: TrackFx,
+): { input: AudioNode; output: AudioNode } | null {
+  const nodes: AudioNode[] = [];
+  if (fx.eq.low !== 0 || fx.eq.mid !== 0 || fx.eq.high !== 0) {
+    nodes.push(
+      makeBiquad(ctx, "lowshelf", EQ_LOW_HZ, fx.eq.low),
+      makeBiquad(ctx, "peaking", EQ_MID_HZ, fx.eq.mid),
+      makeBiquad(ctx, "highshelf", EQ_HIGH_HZ, fx.eq.high),
+    );
+  }
+  if (fx.comp.on) {
+    const c = ctx.createDynamicsCompressor();
+    c.threshold.value = fx.comp.threshold;
+    c.ratio.value = fx.comp.ratio;
+    c.attack.value = fx.comp.attack;
+    c.release.value = fx.comp.release;
+    nodes.push(c);
+  }
+  if (!nodes.length) return null;
+  for (let i = 1; i < nodes.length; i++) nodes[i - 1].connect(nodes[i]);
+  return { input: nodes[0], output: nodes[nodes.length - 1] };
+}
 
 /** 波形の実効値。メーターの振れ幅にそのまま使う。 */
 function rms(node: AnalyserNode, buf: Uint8Array<ArrayBuffer>): number {
@@ -131,6 +198,7 @@ export class Engine {
   private masterVol = 0.9;
   private lastRender: AudioBuffer | null = null;
   private selectedId: string | null = null;
+  private fxId: string | null = null;
   private auditionSrc: AudioBufferSourceNode | null = null;
   private bouncing = false;
   private message = "音声ファイルを読み込むと計測が始まります。";
@@ -189,6 +257,7 @@ export class Engine {
         trimStart: t.trimStart,
         fadeIn: t.fadeIn,
         fadeOut: t.fadeOut,
+        fx: { eq: { ...t.fx.eq }, comp: { ...t.fx.comp } },
         dimmed: t.mute || (solo && !t.solo),
         selected: t.id === this.selectedId,
       })),
@@ -197,6 +266,7 @@ export class Engine {
       looping: this.looping,
       duration: this.total(),
       masterVol: this.masterVol,
+      fxId: this.fxId,
       telemetry: this.telemetry,
       message: this.message,
       hasRender: this.lastRender !== null,
@@ -291,7 +361,16 @@ export class Engine {
     const ctx = this.audio();
     const gain = ctx.createGain();
     const pan = ctx.createStereoPanner();
-    gain.connect(pan);
+    /* エフェクトは常設で gain → EQ3段 → pan に挟む（ゲイン 0dB の棚/ピークは
+       素通しなので、未使用でも音は変わらない）。コンプはトグル時に配線する。 */
+    const fxLow = makeBiquad(ctx, "lowshelf", EQ_LOW_HZ, 0);
+    const fxMid = makeBiquad(ctx, "peaking", EQ_MID_HZ, 0);
+    const fxHigh = makeBiquad(ctx, "highshelf", EQ_HIGH_HZ, 0);
+    const fxComp = ctx.createDynamicsCompressor();
+    gain.connect(fxLow);
+    fxLow.connect(fxMid);
+    fxMid.connect(fxHigh);
+    fxHigh.connect(pan);
     if (this.master) pan.connect(this.master);
     const t: Track = {
       id: `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`,
@@ -310,6 +389,11 @@ export class Engine {
       fadeIn: 0,
       fadeOut: 0,
       fade: null,
+      fx: defaultFx(),
+      fxLow,
+      fxMid,
+      fxHigh,
+      fxComp,
       color: HUE[this.nextHue++ % HUE.length],
       decodeMs: ms,
       peaks: null,
@@ -335,9 +419,14 @@ export class Engine {
     const t = this.find(id);
     if (!t) return;
     if (this.selectedId === id) this.selectedId = null;
+    if (this.fxId === id) this.fxId = null;
     this.stopSrc(t);
     try {
       t.gain.disconnect();
+      t.fxLow.disconnect();
+      t.fxMid.disconnect();
+      t.fxHigh.disconnect();
+      t.fxComp.disconnect();
       t.pan.disconnect();
     } catch {
       /* 既に切れているだけなので無視してよい */
@@ -478,6 +567,52 @@ export class Engine {
       `${t.name} をトリム: 実効 ${(t.trimEnd - t.trimStart).toFixed(2)}s（頭 ${t.trimStart.toFixed(2)}s）`,
     );
     this.rebuildIfPlaying();
+    this.emit();
+  }
+
+  /* ── エフェクト ────────────────────────────────────────────────────── */
+
+  toggleFxPanel(id: string): void {
+    this.fxId = this.fxId === id ? null : id;
+    this.emit();
+  }
+
+  /** EQ のバンドゲイン（dB）。常設ノードなので再生中でも即座に効く。 */
+  setEq(id: string, band: "low" | "mid" | "high", dB: number): void {
+    const t = this.find(id);
+    if (!t) return;
+    t.fx.eq[band] = dB;
+    const node = band === "low" ? t.fxLow : band === "mid" ? t.fxMid : t.fxHigh;
+    node.gain.value = dB;
+    this.emit();
+  }
+
+  setComp(id: string, key: "threshold" | "ratio" | "attack" | "release", v: number): void {
+    const t = this.find(id);
+    if (!t) return;
+    t.fx.comp[key] = v;
+    t.fxComp[key].value = v;
+    this.emit();
+  }
+
+  /** コンプの ON/OFF。素通しを保証するため、OFF は配線ごと外す。 */
+  toggleComp(id: string): void {
+    const t = this.find(id);
+    if (!t) return;
+    t.fx.comp.on = !t.fx.comp.on;
+    t.fxHigh.disconnect();
+    t.fxComp.disconnect();
+    if (t.fx.comp.on) {
+      const c = t.fxComp;
+      c.threshold.value = t.fx.comp.threshold;
+      c.ratio.value = t.fx.comp.ratio;
+      c.attack.value = t.fx.comp.attack;
+      c.release.value = t.fx.comp.release;
+      t.fxHigh.connect(c);
+      c.connect(t.pan);
+    } else {
+      t.fxHigh.connect(t.pan);
+    }
     this.emit();
   }
 
@@ -701,7 +836,15 @@ export class Engine {
         } else {
           s.connect(g);
         }
-        g.connect(p);
+        /* エフェクトはプレーンなデータからオフライン側のノードを組み直す。
+           素通し（EQ 全バンド 0dB・コンプ OFF）のときは挟まない。 */
+        const chain = buildFxChain(off, t.fx);
+        if (chain) {
+          g.connect(chain.input);
+          chain.output.connect(p);
+        } else {
+          g.connect(p);
+        }
         p.connect(mg);
         s.start(t.offset, t.trimStart, eff);
       }
