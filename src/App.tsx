@@ -29,13 +29,7 @@ export default function App() {
     return () => removeEventListener("keydown", onKey);
   }, []);
 
-  /* ルーラーの色はテーマ由来なので、切り替わったら描き直す。 */
-  useEffect(() => {
-    const mq = matchMedia("(prefers-color-scheme: dark)");
-    const redraw = () => engine.setPxPerSec(engine.getSnapshot().pxPerSec);
-    mq.addEventListener("change", redraw);
-    return () => mq.removeEventListener("change", redraw);
-  }, []);
+  /* テーマ切り替え時のルーラーの描き直しは Ruler 自身が matchMedia を購読して行う。 */
 
   /* ドラッグ＆ドロップ。dragenter/leave は子要素をまたぐたびに飛ぶので深さで数える。 */
   const depth = useDropDepth(setArmed);

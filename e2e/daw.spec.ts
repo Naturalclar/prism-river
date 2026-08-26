@@ -8,6 +8,32 @@ async function load(page: Page, files: string[]) {
   await expect(page.getByTestId("track-head")).toHaveCount(files.length);
 }
 
+/* range 入力は fill が効かないので、ネイティブの setter で値を入れて input を飛ばす。 */
+async function setZoom(page: Page, value: number) {
+  await page.locator("#zoom").evaluate((el, v) => {
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    set?.call(el, String(v));
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }, value);
+}
+
+/* タイル canvas の中央行を読んで、描画済みかどうかを見る。未描画（width=0）は 0。 */
+async function tilePixelSum(page: Page, index: number): Promise<number> {
+  return page
+    .locator("[data-testid=clip] canvas")
+    .nth(index)
+    .evaluate((el) => {
+      const cv = el as HTMLCanvasElement;
+      if (!cv.width) return 0;
+      const g = cv.getContext("2d");
+      if (!g) return 0;
+      const d = g.getImageData(0, Math.floor(cv.height / 2), Math.min(2000, cv.width), 1).data;
+      let s = 0;
+      for (const v of d) s += v;
+      return s;
+    });
+}
+
 let errors: string[] = [];
 
 test.beforeEach(async ({ page }) => {
@@ -74,6 +100,50 @@ test("ミックスを書き出すとオフラインレンダーの計測値が�
   const ms = Number.parseFloat((await page.getByTestId("probe-off").textContent()) ?? "0");
   expect(ms).toBeGreaterThan(0);
   expect(ms).toBeLessThan(2000);
+});
+
+/* 全幅 1 枚の canvas は一辺上限（Chromium 65535 デバイス px）を超えると
+   黙って白紙になる回帰。170秒 × 400px/s = 68,000px で上限を踏む。 */
+test("長尺トラックを高ズームにしても波形が消えない", async ({ page }) => {
+  await load(page, [makeTone("long.wav", 440, 170)]);
+  await setZoom(page, 400);
+
+  /* クリップはタイルに割られ、各タイルは上限に収まる幅（8192px 以下）。 */
+  const widths = await page
+    .locator("[data-testid=clip] canvas")
+    .evaluateAll((els) => els.map((el) => el.getBoundingClientRect().width));
+  expect(widths.length).toBeGreaterThan(1);
+  expect(Math.max(...widths)).toBeLessThanOrEqual(8192);
+  /* タイルを合わせるとクリップ全幅（約 170s × 400px/s。デコード時の
+     リサンプルで数 px ずれることがある）を隙間なく覆っている。 */
+  const clipW = await page
+    .getByTestId("clip")
+    .evaluate((el) => el.getBoundingClientRect().width);
+  expect(Math.round(widths.reduce((a, b) => a + b, 0))).toBe(Math.round(clipW));
+  expect(clipW).toBeGreaterThan(65535);
+
+  /* 見えている先頭タイルに波形が描かれる。 */
+  await expect.poll(() => tilePixelSum(page, 0), { timeout: 5000 }).toBeGreaterThan(0);
+
+  /* スクロールで入ってきたタイルも描かれる。 */
+  await page.getByTestId("reel").evaluate((el) => {
+    el.scrollLeft = 40000;
+  });
+  const mid = Math.floor(40100 / 8192);
+  await expect.poll(() => tilePixelSum(page, mid), { timeout: 5000 }).toBeGreaterThan(0);
+});
+
+/* テーマ切り替えでルーラーの目盛り色が旧テーマのまま残る回帰。 */
+test("テーマを切り替えるとルーラーが描き直される", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.goto("/");
+  const tile = page.locator("[data-testid=ruler] canvas").first();
+  const shot = () => tile.evaluate((el) => (el as HTMLCanvasElement).toDataURL());
+  /* 初回描画（未描画タイルは width=0 で "data:," になる）を待つ。 */
+  await expect.poll(shot, { timeout: 5000 }).not.toBe("data:,");
+  const dark = await shot();
+  await page.emulateMedia({ colorScheme: "light" });
+  await expect.poll(shot, { timeout: 5000 }).not.toBe(dark);
 });
 
 /* 保存経路が失敗しても bouncing が戻り、ボタンが使える状態に復帰する回帰。

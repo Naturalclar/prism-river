@@ -1,43 +1,36 @@
-import { useEffect, useRef, type CSSProperties, type PointerEvent } from "react";
+import { useRef, type CSSProperties, type PointerEvent } from "react";
 import { engine } from "../audio/instance";
 import { CLIP_PAD, LANE_H, type TrackView } from "../audio/engine";
+import { Tiles } from "./Tiles";
+
+const WAVE_H = LANE_H - CLIP_PAD * 2 - 2;
 
 /**
- * 1トラック＝1クリップ。波形は Canvas に直接描く。
+ * 1トラック＝1クリップ。波形は Canvas に直接描く。長尺・高ズームでは全幅が
+ * canvas の一辺上限を超えるので、Tiles で分割して見えた部分だけ描く。
  * ドラッグ中は左端を DOM に直書きして、離したときだけ React とグラフを組み直す
  * （毎フレーム再レンダーするとオーディオのタイミングにノイズが乗るため）。
  */
 export function Clip({ t, pxPerSec }: { t: TrackView; pxPerSec: number }) {
-  const cv = useRef<HTMLCanvasElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const drag = useRef<{ id: number; x0: number; off0: number; moved: boolean } | null>(null);
 
   const w = Math.max(1, Math.round(t.duration * pxPerSec));
 
-  useEffect(() => {
-    const canvas = cv.current;
-    if (!canvas) return;
-    const h = LANE_H - CLIP_PAD * 2 - 2;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
-    canvas.style.width = `${w}px`;
-    canvas.style.height = `${h}px`;
-    const g = canvas.getContext("2d");
+  const paint = (g: CanvasRenderingContext2D, x0: number, tw: number) => {
     const p = engine.peaksFor(t.id, w);
-    if (!g || !p) return;
-    g.scale(dpr, dpr);
-    g.clearRect(0, 0, w, h);
-    const mid = h / 2;
+    if (!p) return;
+    const mid = WAVE_H / 2;
+    const end = Math.min(w, x0 + tw);
     g.fillStyle = t.color;
-    for (let x = 0; x < w; x++) {
+    for (let x = x0; x < end; x++) {
       const up = Math.max(1, p.hi[x] * mid);
       const dn = Math.max(1, -p.lo[x] * mid);
       g.fillRect(x, mid - up, 1, up + dn);
     }
     g.globalAlpha = 0.45;
-    g.fillRect(0, mid, w, 1);
-  }, [t.id, t.color, w]);
+    g.fillRect(x0, mid, end - x0, 1);
+  };
 
   const down = (e: PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
@@ -76,7 +69,9 @@ export function Clip({ t, pxPerSec }: { t: TrackView; pxPerSec: number }) {
       onPointerUp={up}
       onPointerCancel={up}
     >
-      <canvas ref={cv} />
+      <div className="wave">
+        <Tiles width={w} height={WAVE_H} paint={paint} deps={[t.id, t.color, w]} />
+      </div>
       <div className="tag">{t.name}</div>
     </div>
   );
