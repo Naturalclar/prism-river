@@ -8,6 +8,7 @@ import {
 } from "react";
 import { engine } from "./audio/instance";
 import { Deck } from "./components/Deck";
+import { FxPanel } from "./components/FxPanel";
 import { Probe } from "./components/Probe";
 import { Reel } from "./components/Reel";
 import { TrackHead } from "./components/TrackHead";
@@ -160,7 +161,7 @@ export default function App() {
           <div className="rack-top">Tracks</div>
           <div className="rack-list">
             {snap.tracks.map((t) => (
-              <TrackHead t={t} key={t.id} />
+              <TrackHead t={t} fxOpen={snap.fxId === t.id} key={t.id} />
             ))}
           </div>
         </div>
@@ -170,6 +171,7 @@ export default function App() {
         <div className="catch">ドロップして読み込む</div>
       </div>
 
+      <FxPanel snap={snap} />
       <Probe snap={snap} />
     </>
   );

@@ -183,6 +183,24 @@ input[type=range]::-moz-range-thumb{
   background:var(--accent); cursor:ew-resize; z-index:3; opacity:.45;
 }
 .clip .fade-handle:hover{opacity:1}
+
+/* fx panel */
+.fxpanel{
+  position:fixed; left:12px; bottom:56px; z-index:20; width:250px;
+  background:var(--panel); border:1px solid var(--line-strong); border-radius:6px;
+  box-shadow:var(--shadow); padding:10px 12px;
+  display:flex; flex-direction:column; gap:7px;
+}
+.fxpanel .fx-top{display:flex; align-items:center; gap:8px}
+.fxpanel .fx-top b{
+  font-size:12px; flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.fxpanel .fx-top span{
+  font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-faint);
+}
+.fxpanel .head-pot span{width:34px}
+.fxpanel .head-pot em{width:48px}
+.fxpanel input[type=range]:disabled{opacity:.35; cursor:default}
 .clip .tag{
   position:absolute; left:5px; top:3px; font-size:9.5px; letter-spacing:.05em;
   color:var(--tc); font-weight:600; pointer-events:none;
