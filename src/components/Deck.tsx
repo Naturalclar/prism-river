@@ -7,7 +7,18 @@ import { Meters } from "./Meters";
 const PLAY = "M3 2l11 6-11 6z";
 const PAUSE = "M3 2h4v12H3zM9 2h4v12H9z";
 
-export function Deck({ snap }: { snap: Snapshot }) {
+type DeckProps = {
+  snap: Snapshot;
+  /** 端末内に保存済みプロジェクトがあるときの保存日時。無ければ null。 */
+  savedAt: number | null;
+  /** 保存・復元・削除の実行中。多重実行を防ぐ。 */
+  storeBusy: boolean;
+  onSave: () => void;
+  onRestore: () => void;
+  onDiscard: () => void;
+};
+
+export function Deck({ snap, savedAt, storeBusy, onSave, onRestore, onDiscard }: DeckProps) {
   const picker = useRef<HTMLInputElement>(null);
   const idle = snap.tracks.length === 0;
 
@@ -102,6 +113,24 @@ export function Deck({ snap }: { snap: Snapshot }) {
         {snap.hasRender && (
           <button className="ghost" onClick={() => engine.audition()}>
             {snap.auditioning ? "試聴を止める" : "レンダーを試聴"}
+          </button>
+        )}
+        <button
+          className="ghost"
+          disabled={idle || storeBusy}
+          title="トラック構成と音声をこの端末のブラウザ内に保存する"
+          onClick={onSave}
+        >
+          プロジェクトを保存
+        </button>
+        {savedAt !== null && idle && (
+          <button className="ghost" disabled={storeBusy} onClick={onRestore}>
+            前回を復元
+          </button>
+        )}
+        {savedAt !== null && (
+          <button className="ghost" disabled={storeBusy} onClick={onDiscard}>
+            保存データを消す
           </button>
         )}
       </div>
