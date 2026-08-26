@@ -108,7 +108,12 @@ Vite + TypeScript + React + oxlint + pnpm。
 
 | ファイル | |
 | --- | --- |
-| `src/audio/engine.ts` | オーディオの全状態。React 非依存 |
+| `src/audio/engine.ts` | オーディオの全状態を持つ `Engine`（ファサード）。React 非依存 |
+| `src/audio/types.ts` | `Track` / `Snapshot` などの型と定数。engine から re-export される |
+| `src/audio/graph.ts` | ノード構築（EQ / コンプ / フェードのランプ）とメーターの RMS |
+| `src/audio/bounce.ts` | オフライン一括レンダーと WAV / webm の書き出し・保存 |
+| `src/audio/recorder.ts` | マイク録音のセッション管理 |
+| `src/audio/project.ts` | 保存（#18）用メタの構築 |
 | `src/lib/peaks.ts` | 波形のピーク計算（純粋関数） |
 | `src/lib/wav.ts` | WAV エンコード（純粋関数） |
 | `src/lib/time.ts` | 時間表示・ルーラーの刻み（純粋関数） |
