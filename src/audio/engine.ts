@@ -1,4 +1,5 @@
 import { computePeaks, type Peaks } from "../lib/peaks";
+import { trimEndTo, trimStartTo } from "../lib/trim";
 import { encodeWav } from "../lib/wav";
 
 /* 先頭3色は騒霊三姉妹。弦=ルナサ / 管=メルラン / 鍵盤=リリカ。
@@ -20,6 +21,9 @@ export type Track = {
   mute: boolean;
   solo: boolean;
   offset: number;
+  /** バッファ内のトリム範囲（秒）。非破壊で、再生時に範囲指定するだけ。 */
+  trimStart: number;
+  trimEnd: number;
   color: string;
   decodeMs: number;
   peaks: Peaks | null;
@@ -35,7 +39,10 @@ export type TrackView = {
   mute: boolean;
   solo: boolean;
   offset: number;
+  /** トリム後の実効長（秒）。 */
   duration: number;
+  /** バッファ内のトリム開始（秒）。端ドラッグの基準値。 */
+  trimStart: number;
   /** ミュート、または他がソロ中で自分はソロでない。 */
   dimmed: boolean;
   /** クリックで選択中。Delete キーの削除対象。 */
@@ -168,7 +175,8 @@ export class Engine {
         mute: t.mute,
         solo: t.solo,
         offset: t.offset,
-        duration: t.buf.duration,
+        duration: t.trimEnd - t.trimStart,
+        trimStart: t.trimStart,
         dimmed: t.mute || (solo && !t.solo),
         selected: t.id === this.selectedId,
       })),
@@ -285,6 +293,8 @@ export class Engine {
       mute: false,
       solo: false,
       offset: 0,
+      trimStart: 0,
+      trimEnd: buf.duration,
       color: HUE[this.nextHue++ % HUE.length],
       decodeMs: ms,
       peaks: null,
@@ -328,11 +338,16 @@ export class Engine {
     return this.tracks.find((t) => t.id === id);
   }
 
-  /** 波形描画用。React には流さず、Clip から直に読む。 */
+  /** 波形描画用。React には流さず、Clip から直に読む。トリム範囲だけ畳む。 */
   peaksFor(id: string, cols: number): Peaks | null {
     const t = this.find(id);
     if (!t) return null;
-    if (!t.peaks || t.peaks.cols !== cols) t.peaks = computePeaks(t.buf.getChannelData(0), cols);
+    if (!t.peaks || t.peaks.cols !== cols) {
+      const data = t.buf.getChannelData(0);
+      const a = Math.floor(t.trimStart * t.buf.sampleRate);
+      const b = Math.min(data.length, Math.ceil(t.trimEnd * t.buf.sampleRate));
+      t.peaks = computePeaks(data.subarray(a, b), cols);
+    }
     return t.peaks;
   }
 
@@ -412,19 +427,58 @@ export class Engine {
     const t = this.find(id);
     if (!t) return;
     this.say(`${t.name} の開始位置: ${t.offset.toFixed(2)}s`);
-    if (this.playing) {
-      const at = this.now();
-      this.halt(true);
-      this.seekAt = at;
-      this.play();
-    }
+    this.rebuildIfPlaying();
     this.emit();
+  }
+
+  /* ── トリム ────────────────────────────────────────────────────────── */
+
+  /**
+   * 端のドラッグ中に呼ぶ。クランプ後の値を返すので、呼び出し側はそれで
+   * DOM を直に動かす（再描画はしない）。左端は offset が連動する。
+   */
+  trimTo(
+    id: string,
+    edge: "start" | "end",
+    sec: number,
+  ): { offset: number; trimStart: number; duration: number } | null {
+    const t = this.find(id);
+    if (!t) return null;
+    const span = { offset: t.offset, trimStart: t.trimStart, trimEnd: t.trimEnd };
+    const next = edge === "start" ? trimStartTo(span, sec) : trimEndTo(span, t.buf.duration, sec);
+    if (next.trimStart !== t.trimStart || next.trimEnd !== t.trimEnd || next.offset !== t.offset) {
+      t.trimStart = next.trimStart;
+      t.trimEnd = next.trimEnd;
+      t.offset = next.offset;
+      t.peaks = null;
+    }
+    return { offset: t.offset, trimStart: t.trimStart, duration: t.trimEnd - t.trimStart };
+  }
+
+  /** トリムのドラッグを離したときに呼ぶ。 */
+  commitTrim(id: string): void {
+    const t = this.find(id);
+    if (!t) return;
+    this.say(
+      `${t.name} をトリム: 実効 ${(t.trimEnd - t.trimStart).toFixed(2)}s（頭 ${t.trimStart.toFixed(2)}s）`,
+    );
+    this.rebuildIfPlaying();
+    this.emit();
+  }
+
+  /** 再生中にクリップの形が変わったら、位置を保ったままソースを組み直す。 */
+  private rebuildIfPlaying(): void {
+    if (!this.playing) return;
+    const at = this.now();
+    this.halt(true);
+    this.seekAt = at;
+    this.play();
   }
 
   /* ── トランスポート ────────────────────────────────────────────────── */
 
   total(): number {
-    return this.tracks.reduce((m, t) => Math.max(m, t.offset + t.buf.duration), 0);
+    return this.tracks.reduce((m, t) => Math.max(m, t.offset + (t.trimEnd - t.trimStart)), 0);
   }
 
   now(): number {
@@ -454,13 +508,15 @@ export class Engine {
     this.startedAt = at;
     for (const t of this.tracks) {
       this.stopSrc(t);
+      const eff = t.trimEnd - t.trimStart;
       const local = this.seekAt - t.offset;
-      if (local >= t.buf.duration) continue;
+      if (local >= eff) continue;
       const s = ctx.createBufferSource();
       s.buffer = t.buf;
       s.connect(t.gain);
-      if (local >= 0) s.start(at, local);
-      else s.start(at - local);
+      /* トリムは非破壊なので、start の第2・第3引数でバッファ内の範囲を切る。 */
+      if (local >= 0) s.start(at, t.trimStart + local, eff - local);
+      else s.start(at - local, t.trimStart, eff);
       t.src = s;
     }
     this.playing = true;
@@ -561,7 +617,7 @@ export class Engine {
         s.connect(g);
         g.connect(p);
         p.connect(mg);
-        s.start(t.offset);
+        s.start(t.offset, t.trimStart, t.trimEnd - t.trimStart);
       }
       const rendered = await off.startRendering();
       const ms = performance.now() - t0;

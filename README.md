@@ -20,6 +20,8 @@ pnpm dev
 | 再生 / 一時停止 | `Space` またはトランスポート |
 | シーク | ルーラーをクリック |
 | クリップの移動 | 波形を横にドラッグ |
+| クリップのトリム | 左右端をドラッグして頭尻を詰める |
+| トラックの選択 / 削除 | クリップかヘッダをクリック → `Delete` |
 | 音量 / パン / ソロ / ミュート | 左のトラックヘッダ |
 
 ## 今できること
@@ -29,6 +31,8 @@ pnpm dev
 - 再生・停止・ループ、シーク、プレイヘッド追従
 - トラックごとの音量（`GainNode`）・パン（`StereoPannerNode`）・ソロ・ミュート
 - クリップの開始位置を横ドラッグで変更（再生中でも即座に組み直す）
+- クリップの非破壊トリム（左右端をドラッグ。再生・書き出しの両方に効く）
+- トラックのクリック選択と `Delete` キーでの削除
 - マスター音量、`AnalyserNode` による L/R レベルメーター、ズーム
 - `OfflineAudioContext` によるミックスの一括レンダーと WAV 書き出し
 
@@ -58,12 +62,11 @@ pnpm dev
 
 優先度順。検証テーマに効く順で入れ替えてよい。
 
-1. **クリップのトリム** — 左右端をドラッグして頭尻を詰める。DAW として最低限これが要る
-2. **フェードイン / アウト** — `GainNode` の `linearRampToValueAtTime`
-3. **エフェクト** — `BiquadFilterNode`（EQ）と `DynamicsCompressorNode`。ここが「既存の DAW の代わりになるか」の分水嶺
-4. **グループバス** — 弦 / 管 / 鍵盤 の3系統。トラックを3つのサブミックスにまとめて、そこに 3 のエフェクトを挿す
-5. **録音入力** — `getUserMedia` + `MediaRecorder`
-6. **実時間 webm 書き出し** — `MediaStreamAudioDestinationNode` + `MediaRecorder`
+1. **フェードイン / アウト** — `GainNode` の `linearRampToValueAtTime`
+2. **エフェクト** — `BiquadFilterNode`（EQ）と `DynamicsCompressorNode`。ここが「既存の DAW の代わりになるか」の分水嶺
+3. **グループバス** — 弦 / 管 / 鍵盤 の3系統。トラックを3つのサブミックスにまとめて、そこに 2 のエフェクトを挿す
+4. **録音入力** — `getUserMedia` + `MediaRecorder`
+5. **実時間 webm 書き出し** — `MediaStreamAudioDestinationNode` + `MediaRecorder`
 
 詳しい引き継ぎと未決事項は [`docs/HANDOFF.md`](docs/HANDOFF.md)。
 
@@ -77,7 +80,7 @@ Vite + TypeScript + React + oxlint + pnpm。
 | `pnpm build` | 型チェック → 本番ビルド |
 | `pnpm lint` | oxlint（`--deny-warnings` 付き。oxlint は既定だと警告でも exit 0 になる） |
 | `pnpm typecheck` | `tsc --noEmit` |
-| `pnpm test` | vitest（ピーク計算・WAV エンコード・時間変換の単体テスト） |
+| `pnpm test` | vitest（ピーク計算・WAV エンコード・時間変換・トリムの単体テスト） |
 | `pnpm test:e2e` | Playwright（読み込み〜再生〜書き出しの通し） |
 
 ### 作りの前提
@@ -92,8 +95,9 @@ Vite + TypeScript + React + oxlint + pnpm。
 | `src/lib/peaks.ts` | 波形のピーク計算（純粋関数） |
 | `src/lib/wav.ts` | WAV エンコード（純粋関数） |
 | `src/lib/time.ts` | 時間表示・ルーラーの刻み（純粋関数） |
+| `src/lib/trim.ts` | トリムのクランプ計算（純粋関数） |
 | `src/components/` | 表示のみ。状態は持たない |
 
-`src/lib/` の3つは純粋関数なので単体テストがあり、E2E のテスト音源も `src/lib/wav.ts` で生成している（権利のある音源をリポジトリに置かないため）。
+`src/lib/` の4つは純粋関数なので単体テストがあり、E2E のテスト音源も `src/lib/wav.ts` で生成している（権利のある音源をリポジトリに置かないため）。
 
 ローカルに別の Chromium がある環境では `CHROMIUM_PATH=/path/to/chrome pnpm test:e2e` で指定できる。
