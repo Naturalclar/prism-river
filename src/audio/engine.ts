@@ -523,41 +523,48 @@ export class Engine {
     this.bouncing = true;
     this.say("オフラインでミックスを描画中 …");
 
-    const t0 = performance.now();
-    const sr = ctx.sampleRate;
-    const off = new OfflineAudioContext(2, Math.ceil(dur * sr) + sr * 0.1, sr);
-    const mg = off.createGain();
-    mg.gain.value = this.masterVol;
-    mg.connect(off.destination);
-    const solo = this.tracks.some((t) => t.solo);
-    for (const t of this.tracks) {
-      if (t.mute || (solo && !t.solo)) continue;
-      const g = off.createGain();
-      const p = off.createStereoPanner();
-      const s = off.createBufferSource();
-      g.gain.value = t.vol;
-      p.pan.value = t.panv;
-      s.buffer = t.buf;
-      s.connect(g);
-      g.connect(p);
-      p.connect(mg);
-      s.start(t.offset);
+    /* 失敗しても bouncing を必ず戻す。長尺では encodeWav のメモリ確保が
+       落ちることが現実にあり、ここで戻さないと書き出しボタンが死んだままになる。 */
+    try {
+      const t0 = performance.now();
+      const sr = ctx.sampleRate;
+      const off = new OfflineAudioContext(2, Math.ceil(dur * sr) + sr * 0.1, sr);
+      const mg = off.createGain();
+      mg.gain.value = this.masterVol;
+      mg.connect(off.destination);
+      const solo = this.tracks.some((t) => t.solo);
+      for (const t of this.tracks) {
+        if (t.mute || (solo && !t.solo)) continue;
+        const g = off.createGain();
+        const p = off.createStereoPanner();
+        const s = off.createBufferSource();
+        g.gain.value = t.vol;
+        p.pan.value = t.panv;
+        s.buffer = t.buf;
+        s.connect(g);
+        g.connect(p);
+        p.connect(mg);
+        s.start(t.offset);
+      }
+      const rendered = await off.startRendering();
+      const ms = performance.now() - t0;
+      this.telemetry = { ...this.telemetry, offline: `${ms.toFixed(0)} ms`, offlineOk: true };
+      this.lastRender = rendered;
+
+      const wav = encodeWav(rendered);
+      const rt = (dur / (ms / 1000)).toFixed(0);
+      const size = (wav.size / 1048576).toFixed(1);
+      this.say(
+        `レンダー完了: ${dur.toFixed(2)}s / ${size}MB / 実時間の約${rt}倍速。保存を試みています …`,
+      );
+
+      await this.deliver(wav, rt, size);
+    } catch (err) {
+      this.say(`書き出しに失敗しました: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      this.bouncing = false;
+      this.emit();
     }
-    const rendered = await off.startRendering();
-    const ms = performance.now() - t0;
-    this.telemetry = { ...this.telemetry, offline: `${ms.toFixed(0)} ms`, offlineOk: true };
-    this.lastRender = rendered;
-
-    const wav = encodeWav(rendered);
-    const rt = (dur / (ms / 1000)).toFixed(0);
-    const size = (wav.size / 1048576).toFixed(1);
-    this.say(
-      `レンダー完了: ${dur.toFixed(2)}s / ${size}MB / 実時間の約${rt}倍速。保存を試みています …`,
-    );
-
-    await this.deliver(wav, rt, size);
-    this.bouncing = false;
-    this.emit();
   }
 
   /**
@@ -565,8 +572,7 @@ export class Engine {
    * 置いたときは存在しないので、その場合は通常のダウンロードに落とす。
    */
   private async deliver(wav: Blob, rt: string, size: string): Promise<void> {
-    const dl = window.claude ? await window.claude.use("downloads") : null;
-    if (!dl && !window.claude) {
+    if (!window.claude) {
       const url = URL.createObjectURL(wav);
       const a = document.createElement("a");
       a.href = url;
@@ -577,6 +583,13 @@ export class Engine {
       setTimeout(() => URL.revokeObjectURL(url), 30000);
       this.say(`書き出しました: ${size}MB / 実時間の約${rt}倍速。`);
       return;
+    }
+    /* capability の取得自体が reject することがある（無効化されている等）。 */
+    let dl: Downloads | null = null;
+    try {
+      dl = await window.claude.use("downloads");
+    } catch {
+      dl = null;
     }
     if (!dl) {
       this.say(
