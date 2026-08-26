@@ -188,6 +188,41 @@ test("クリックで選択したトラックを Delete で削除できる", asy
   await expect(page.getByTestId("clip")).not.toHaveClass(/selected/);
 });
 
+test("クリップの左右端ドラッグでトリムできる", async ({ page }) => {
+  await load(page, [makeTone("trim.wav", 440, 3)]);
+  const before = await page.getByTestId("clip").boundingBox();
+  if (!before) throw new Error("clip not found");
+
+  /* 右端を 70px（既定ズームで 1 秒）左へ → 全長が 2 秒になる。 */
+  const y = before.y + before.height / 2;
+  await page.mouse.move(before.x + before.width - 4, y);
+  await page.mouse.down();
+  await page.mouse.move(before.x + before.width - 4 - 70, y, { steps: 5 });
+  await page.mouse.up();
+  await expect(page.locator(".clock i")).toHaveText("/ 00:02.00");
+  const trimmed = await page.getByTestId("clip").boundingBox();
+  if (!trimmed) throw new Error("clip not found");
+  expect(trimmed.width).toBeLessThan(before.width - 60);
+
+  /* 左端を 35px（0.5 秒）右へ → 頭が削れて開始位置がその分ずれる。
+     offset が連動するので全長（0.5 + 1.5 = 2 秒）は変わらない。 */
+  await page.mouse.move(trimmed.x + 4, y);
+  await page.mouse.down();
+  await page.mouse.move(trimmed.x + 4 + 35, y, { steps: 5 });
+  await page.mouse.up();
+  const headTrimmed = await page.getByTestId("clip").boundingBox();
+  if (!headTrimmed) throw new Error("clip not found");
+  expect(headTrimmed.x - trimmed.x).toBeGreaterThan(30);
+  expect(headTrimmed.width).toBeLessThan(trimmed.width - 30);
+  await expect(page.locator(".clock i")).toHaveText("/ 00:02.00");
+
+  /* トリム後も再生と書き出しが通る。 */
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "ミックスを書き出す", exact: true }).click();
+  await expect(page.getByTestId("log")).toContainText("書き出しました", { timeout: 15_000 });
+  expect((await download).suggestedFilename()).toBe("prism-river-mix.wav");
+});
+
 test("トラックを消すと空の案内に戻る", async ({ page }) => {
   await load(page, [makeTone("gone.wav", 440)]);
   await page.getByRole("button", { name: /削除/ }).click();

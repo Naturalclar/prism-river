@@ -165,6 +165,10 @@ input[type=range]::-moz-range-thumb{
 .clip.selected{box-shadow:0 0 0 2px var(--accent)}
 .clip .wave{position:absolute; inset:0; display:flex; pointer-events:none}
 .clip canvas{display:block}
+.clip .grip{position:absolute; top:0; bottom:0; width:8px; cursor:ew-resize; z-index:2}
+.clip .grip.l{left:0}
+.clip .grip.r{right:0}
+.clip .grip:hover{background:var(--accent-soft)}
 .clip .tag{
   position:absolute; left:5px; top:3px; font-size:9.5px; letter-spacing:.05em;
   color:var(--tc); font-weight:600; pointer-events:none;
