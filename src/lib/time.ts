@@ -1,8 +1,11 @@
 /** 秒 → `mm:ss.hh`。負値と NaN は 0 に丸める。 */
 export function formatTime(seconds: number): string {
   const s = Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
-  const m = Math.floor(s / 60);
-  const rest = s % 60;
+  /* 丸めはセンチ秒で1回だけ。秒側を toFixed で丸めると 59.999 が "60.00" に
+     繰り上がり、分へ桁上がりせず 00:60.00 になる。 */
+  const cs = Math.round(s * 100);
+  const m = Math.floor(cs / 6000);
+  const rest = (cs % 6000) / 100;
   return `${String(m).padStart(2, "0")}:${rest.toFixed(2).padStart(5, "0")}`;
 }
 

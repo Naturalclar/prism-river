@@ -16,6 +16,14 @@ describe("formatTime", () => {
     expect(formatTime(600)).toBe("10:00.00");
   });
 
+  /* 秒側だけを丸めると 59.999 が "60.00" になり 00:60.00 と表示される回帰。 */
+  it("carries rounding into the minute instead of showing :60", () => {
+    expect(formatTime(59.999)).toBe("01:00.00");
+    expect(formatTime(59.9977)).toBe("01:00.00");
+    expect(formatTime(119.996)).toBe("02:00.00");
+    expect(formatTime(59.99)).toBe("00:59.99");
+  });
+
   it("clamps junk to zero", () => {
     expect(formatTime(-3)).toBe("00:00.00");
     expect(formatTime(Number.NaN)).toBe("00:00.00");
