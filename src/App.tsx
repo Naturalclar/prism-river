@@ -12,10 +12,92 @@ import { FxPanel } from "./components/FxPanel";
 import { Probe } from "./components/Probe";
 import { Reel } from "./components/Reel";
 import { TrackHead } from "./components/TrackHead";
+import {
+  clearProject,
+  freeBytes,
+  loadMetaSync,
+  loadProject,
+  requestPersist,
+  saveProject,
+} from "./lib/store";
 
 export default function App() {
   const snap = useSyncExternalStore(engine.subscribe, engine.getSnapshot);
   const [armed, setArmed] = useState(false);
+  /* 端末内に保存済みプロジェクトがあるか。中身は使わず有無と日時だけ見る。 */
+  const [savedAt, setSavedAt] = useState<number | null>(() => loadMetaSync()?.savedAt ?? null);
+  const [storeBusy, setStoreBusy] = useState(false);
+
+  /* 起動時に保存データがあれば、ログ欄で復元を提案する（初回マウント時のみ）。 */
+  useEffect(() => {
+    const meta = loadMetaSync();
+    if (meta && engine.getSnapshot().tracks.length === 0) {
+      engine.notify(
+        `前回保存したプロジェクト（${new Date(meta.savedAt).toLocaleString()}）があります。「前回を復元」で戻せます。`,
+      );
+    }
+  }, []);
+
+  const save = async () => {
+    const p = engine.exportProject();
+    if (!p || storeBusy) return;
+    setStoreBusy(true);
+    try {
+      const size = p.blobs.reduce((n, b) => n + b.size, 0);
+      const free = await freeBytes();
+      if (free !== null && size > free) {
+        engine.notify(
+          `保存できません: 音声 ${(size / 1048576).toFixed(1)}MB がブラウザの空き容量（約 ${(free / 1048576).toFixed(0)}MB）を超えています。`,
+        );
+        return;
+      }
+      requestPersist();
+      await saveProject(p.meta, p.blobs);
+      setSavedAt(p.meta.savedAt);
+      engine.notify(
+        `プロジェクトを保存しました（トラック ${p.meta.tracks.length} 本 / 音声 ${(size / 1048576).toFixed(1)}MB / この端末のブラウザ内のみ）。`,
+      );
+    } catch (err) {
+      engine.notify(`保存に失敗しました: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setStoreBusy(false);
+    }
+  };
+
+  const restore = async () => {
+    if (storeBusy) return;
+    setStoreBusy(true);
+    try {
+      const p = await loadProject();
+      if (!p) {
+        setSavedAt(null);
+        engine.notify("保存データが見つかりませんでした。");
+        return;
+      }
+      await engine.importProject(p.meta, p.blobs);
+      engine.notify(
+        `前回のプロジェクトを復元しました（トラック ${p.meta.tracks.length} 本 / 保存日時 ${new Date(p.meta.savedAt).toLocaleString()}）。`,
+      );
+    } catch (err) {
+      engine.notify(`復元に失敗しました: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setStoreBusy(false);
+    }
+  };
+
+  const discard = async () => {
+    if (storeBusy) return;
+    setStoreBusy(true);
+    try {
+      await clearProject();
+      setSavedAt(null);
+      engine.notify("保存データを削除しました。");
+    } catch (err) {
+      engine.notify(`保存データの削除に失敗しました: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setStoreBusy(false);
+    }
+  };
 
   /* Space で再生／一時停止、Delete / Backspace で選択中トラックの削除。
      フォーム上のキー入力は横取りしない。 */
@@ -43,7 +125,14 @@ export default function App() {
 
   return (
     <>
-      <Deck snap={snap} />
+      <Deck
+        snap={snap}
+        savedAt={savedAt}
+        storeBusy={storeBusy}
+        onSave={() => void save()}
+        onRestore={() => void restore()}
+        onDiscard={() => void discard()}
+      />
 
       <div
         className={`stage${armed ? " armed" : ""}`}

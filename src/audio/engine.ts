@@ -1,5 +1,6 @@
 import { clampFades, rampSegment, type Ramp } from "../lib/fade";
 import { computePeaks, type Peaks } from "../lib/peaks";
+import { PROJECT_VERSION, type ProjectMeta } from "../lib/store";
 import { clamp } from "../lib/time";
 import { trimEndTo, trimStartTo } from "../lib/trim";
 import { encodeWav } from "../lib/wav";
@@ -32,6 +33,9 @@ const defaultFx = (): TrackFx => ({
 export type Track = {
   id: string;
   name: string;
+  /** 元ファイル名（拡張子つき）と、その中身。保存（#18）でそのまま書く。 */
+  srcName: string;
+  srcBytes: Blob;
   buf: AudioBuffer;
   gain: GainNode;
   pan: StereoPannerNode;
@@ -361,7 +365,7 @@ export class Engine {
       const buf = await ctx.decodeAudioData(bytes);
       const ms = performance.now() - t0;
       this.decodeTotal += ms;
-      this.push(f.name.replace(/\.[^.]+$/, ""), buf, ms);
+      this.push(f.name.replace(/\.[^.]+$/, ""), f.name, f, buf, ms);
       this.say(
         `${f.name} — ${buf.duration.toFixed(2)}s / ${buf.numberOfChannels}ch / ${buf.sampleRate}Hz / デコード ${ms.toFixed(0)}ms`,
       );
@@ -370,7 +374,7 @@ export class Engine {
     }
   }
 
-  private push(name: string, buf: AudioBuffer, ms: number): void {
+  private push(name: string, srcName: string, srcBytes: Blob, buf: AudioBuffer, ms: number): Track {
     const ctx = this.audio();
     const gain = ctx.createGain();
     const pan = ctx.createStereoPanner();
@@ -388,6 +392,8 @@ export class Engine {
     const t: Track = {
       id: `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`,
       name,
+      srcName,
+      srcBytes,
       buf,
       gain,
       pan,
@@ -414,6 +420,7 @@ export class Engine {
     gain.gain.value = t.vol;
     this.tracks.push(t);
     this.balance();
+    return t;
   }
 
   /** クリックでの選択。`null` で解除。トグルは呼び出し側が行う。 */
@@ -475,6 +482,90 @@ export class Engine {
       decoded: this.decodeTotal ? `${this.decodeTotal.toFixed(0)} ms` : "—",
       ram: this.tracks.length ? `${(ram / 1048576).toFixed(1)} MB` : "—",
     };
+  }
+
+  /* ── プロジェクトの保存・復元（#18） ───────────────────────────────── */
+
+  /**
+   * 保存・復元の口（App 側）がログ欄に書くための公開版。Engine 自身は
+   * ストレージに触らないので、進捗と結果の表示だけここを通る。
+   */
+  notify(m: string): void {
+    this.say(m);
+  }
+
+  /** シリアライズ可能な現在状態。ストレージの都合は呼び出し側（lib/store）に置く。 */
+  exportProject(): { meta: ProjectMeta; blobs: Blob[] } | null {
+    if (!this.tracks.length) return null;
+    return {
+      meta: {
+        version: PROJECT_VERSION,
+        savedAt: Date.now(),
+        masterVol: this.masterVol,
+        pxPerSec: this.pxPerSec,
+        tracks: this.tracks.map((t) => ({
+          name: t.name,
+          srcName: t.srcName,
+          vol: t.vol,
+          panv: t.panv,
+          mute: t.mute,
+          solo: t.solo,
+          offset: t.offset,
+          trimStart: t.trimStart,
+          trimEnd: t.trimEnd,
+          fadeIn: t.fadeIn,
+          fadeOut: t.fadeOut,
+          color: t.color,
+        })),
+      },
+      blobs: this.tracks.map((t) => t.srcBytes),
+    };
+  }
+
+  /**
+   * 保存データからプロジェクトを組み直す。今のトラックは置き換える。
+   * 音声は元ファイルのバイト列から通常のデコード経路を通す（＝デコード時間の
+   * テレメトリも再計測される）。数値は今の実装の範囲にクランプして読む。
+   */
+  async importProject(meta: ProjectMeta, blobs: Blob[]): Promise<void> {
+    const ctx = this.audio();
+    if (ctx.state === "suspended") await ctx.resume();
+    this.halt(true);
+    this.seekAt = 0;
+    while (this.tracks.length) this.remove(this.tracks[0].id);
+
+    for (let i = 0; i < meta.tracks.length; i++) {
+      const m = meta.tracks[i];
+      this.say(`復元中: ${m.srcName} …`);
+      /* ingest と同じく1本ずつ。並列に読むと PCM が一度にメモリへ乗る。 */
+      // oxlint-disable-next-line no-await-in-loop
+      const bytes = await blobs[i].arrayBuffer();
+      const t0 = performance.now();
+      // oxlint-disable-next-line no-await-in-loop
+      const buf = await ctx.decodeAudioData(bytes);
+      const ms = performance.now() - t0;
+      this.decodeTotal += ms;
+      const t = this.push(m.name, m.srcName, blobs[i], buf, ms);
+      t.vol = clamp(m.vol, 0, 1.4);
+      t.panv = clamp(m.panv, -1, 1);
+      t.pan.pan.value = t.panv;
+      t.mute = m.mute;
+      t.solo = m.solo;
+      t.offset = Math.max(0, m.offset);
+      t.trimEnd = clamp(m.trimEnd, 0, buf.duration);
+      t.trimStart = clamp(m.trimStart, 0, t.trimEnd);
+      const eff = t.trimEnd - t.trimStart;
+      t.fadeIn = clamp(m.fadeIn, 0, eff);
+      t.fadeOut = clamp(m.fadeOut, 0, Math.max(0, eff - t.fadeIn));
+      t.color = m.color;
+    }
+    this.nextHue = this.tracks.length;
+    this.masterVol = clamp(meta.masterVol, 0, 1.4);
+    if (this.master) this.master.gain.value = this.masterVol;
+    this.pxPerSec = clamp(meta.pxPerSec, 8, 400);
+    this.balance();
+    this.refreshTelemetry();
+    this.emit();
   }
 
   /* ── 録音 ──────────────────────────────────────────────────────────── */
@@ -563,7 +654,9 @@ export class Engine {
       const ms = performance.now() - t0;
       this.decodeTotal += ms;
       const name = `録音 ${++this.recCount}`;
-      this.push(name, buf, ms);
+      /* 保存（#18）用に、エンコード済みの録音チャンクを元ファイルとして持たせる。 */
+      const ext = blob.type.includes("ogg") ? "ogg" : blob.type.includes("mp4") ? "m4a" : "webm";
+      this.push(name, `${name}.${ext}`, blob, buf, ms);
       this.refreshTelemetry();
       this.say(
         `${name} — ${buf.duration.toFixed(2)}s / ${buf.numberOfChannels}ch / ${buf.sampleRate}Hz / デコード ${ms.toFixed(0)}ms`,
