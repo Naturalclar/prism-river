@@ -136,7 +136,7 @@ WASM の領分は **Web Audio API に機能として無いもの**:
 
 推奨側の懸念（再描画コストが計測に乗る）は、**構造で外してある**:
 
-- `src/audio/engine.ts` の `Engine` が AudioContext・トラック・トランスポートを全部持つ。React には依存しない
+- `src/audio/engine.ts` の `Engine` が AudioContext・トラック・トランスポートを全部持つ。React には依存しない（#40 で肥大化を分割: グラフ構築は `audio/graph.ts`、書き出しは `audio/bounce.ts`、録音は `audio/recorder.ts`、保存メタは `audio/project.ts`、型と定数は `audio/types.ts`。`Engine` は公開 API を保つファサードで、コンポーネントの import 元は従来どおり engine.ts）
 - React は `useSyncExternalStore` で**スナップショット**（AudioNode を含まない素のデータ）を読むだけ
 - プレイヘッド・時計・レベルメーターは `engine.onFrame()` を購読して **DOM を直に書き換える**。毎フレームの再レンダーは発生しない
 - クリップの横ドラッグ中も `style.left` を直書きし、指を離したときだけ `commitOffset()` で React と再生グラフを組み直す
