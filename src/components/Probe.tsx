@@ -16,6 +16,7 @@ export function Probe({ snap }: { snap: Snapshot }) {
     { id: "ram", label: "RAM (PCM)", value: t.ram },
     { id: "off", label: "Offline render", value: t.offline, ok: t.offlineOk },
     { id: "webm", label: "webm export", value: t.webm, ok: t.webm !== "未実行" },
+    { id: "mp3", label: "MP3 encode", value: t.mp3, ok: t.mp3 !== "未実行" },
   ];
 
   return (

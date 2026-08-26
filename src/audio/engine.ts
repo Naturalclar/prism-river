@@ -1,5 +1,7 @@
+import { encodeMp3InWorker } from "./mp3";
+import { MP3_KBPS } from "../lib/mp3";
 import { computePeaks, type Peaks } from "../lib/peaks";
-import type { ProjectMeta } from "../lib/store";
+import { BUS_IDS, type BusId, type BusVols, type ProjectMeta } from "../lib/store";
 import { clamp } from "../lib/time";
 import { trimEndTo, trimStartTo } from "../lib/trim";
 import { encodeWav } from "../lib/wav";
@@ -7,10 +9,19 @@ import { deliverBlob, deliverWav, recordToWebm, renderMix, webmSupported } from 
 import { EQ_HIGH_HZ, EQ_LOW_HZ, EQ_MID_HZ, makeBiquad, rms, scheduleFades } from "./graph";
 import { projectMetaOf } from "./project";
 import { collectRecording, openMic, type RecSession } from "./recorder";
-import { defaultFx, HUE, type Snapshot, type Telemetry, type Track, type TrackFx } from "./types";
+import {
+  BUS_INFO,
+  defaultFx,
+  HUE,
+  type Snapshot,
+  type Telemetry,
+  type Track,
+  type TrackFx,
+} from "./types";
 
 /* 型と定数は types.ts が正本。コンポーネントは従来どおりここから import できる。 */
-export { CLIP_PAD, HUE, LANE_H } from "./types";
+export { BUS_INFO, CLIP_PAD, HUE, LANE_H } from "./types";
+export { BUS_IDS, type BusId } from "../lib/store";
 export type { Snapshot, Telemetry, Track, TrackFx, TrackView } from "./types";
 
 const AUDIO_EXT = /\.(mp3|wav|m4a|aac|ogg|flac)$/i;
@@ -23,6 +34,9 @@ const AUDIO_EXT = /\.(mp3|wav|m4a|aac|ogg|flac)$/i;
 export class Engine {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
+  /** グループバス。トラックは pan → busGain → master。作成は audio() で。 */
+  private busGain: Record<BusId, GainNode> | null = null;
+  private busVol: BusVols = { strings: 1, winds: 1, keys: 1 };
   private analyser: {
     L: AnalyserNode;
     R: AnalyserNode;
@@ -50,6 +64,7 @@ export class Engine {
   private auditionSrc: AudioBufferSourceNode | null = null;
   private bouncing = false;
   private webmBusy = false;
+  private mp3Busy = false;
   private message = "音声ファイルを読み込むと計測が始まります。";
   private telemetry: Telemetry = {
     sampleRate: "—",
@@ -58,6 +73,7 @@ export class Engine {
     ram: "—",
     offline: "未実行",
     webm: "未実行",
+    mp3: "未実行",
     offlineOk: false,
   };
 
@@ -107,6 +123,7 @@ export class Engine {
         trimStart: t.trimStart,
         fadeIn: t.fadeIn,
         fadeOut: t.fadeOut,
+        bus: t.bus,
         fx: { eq: { ...t.fx.eq }, comp: { ...t.fx.comp } },
         dimmed: t.mute || (solo && !t.solo),
         selected: t.id === this.selectedId,
@@ -116,6 +133,7 @@ export class Engine {
       looping: this.looping,
       duration: this.total(),
       masterVol: this.masterVol,
+      busVol: { ...this.busVol },
       fxId: this.fxId,
       telemetry: this.telemetry,
       message: this.message,
@@ -124,6 +142,7 @@ export class Engine {
       bouncing: this.bouncing,
       recording: this.rec !== null,
       webmBusy: this.webmBusy,
+      mp3Busy: this.mp3Busy,
     };
   }
 
@@ -150,6 +169,17 @@ export class Engine {
     splitter.connect(aL, 0);
     splitter.connect(aR, 1);
     master.connect(ctx.destination);
+
+    /* グループバス3系統。将来のバスエフェクト（#12 と同型）は
+       busGain と master の間に挿す。 */
+    const busGain = {} as Record<BusId, GainNode>;
+    for (const b of BUS_IDS) {
+      const g = ctx.createGain();
+      g.gain.value = this.busVol[b];
+      g.connect(master);
+      busGain[b] = g;
+    }
+    this.busGain = busGain;
 
     this.ctx = ctx;
     this.master = master;
@@ -243,6 +273,7 @@ export class Engine {
       fadeIn: 0,
       fadeOut: 0,
       fade: null,
+      bus: null,
       fx: defaultFx(),
       fxLow,
       fxMid,
@@ -333,7 +364,7 @@ export class Engine {
   exportProject(): { meta: ProjectMeta; blobs: Blob[] } | null {
     if (!this.tracks.length) return null;
     return {
-      meta: projectMetaOf(this.tracks, this.masterVol, this.pxPerSec),
+      meta: projectMetaOf(this.tracks, this.masterVol, this.pxPerSec, this.busVol),
       blobs: this.tracks.map((t) => t.srcBytes),
     };
   }
@@ -375,8 +406,15 @@ export class Engine {
       t.fadeOut = clamp(m.fadeOut, 0, Math.max(0, eff - t.fadeIn));
       this.applyFx(t, m.fx);
       t.color = m.color;
+      t.bus = m.bus ?? null;
+      this.routeTrack(t);
     }
     this.nextHue = this.tracks.length;
+    for (const b of BUS_IDS) {
+      /* バス導入前の保存には busVol が無い。その場合は素通し（1.0）。 */
+      this.busVol[b] = clamp(meta.busVol?.[b] ?? 1, 0, 1.4);
+      if (this.busGain) this.busGain[b].gain.value = this.busVol[b];
+    }
     this.masterVol = clamp(meta.masterVol, 0, 1.4);
     if (this.master) this.master.gain.value = this.masterVol;
     this.pxPerSec = clamp(meta.pxPerSec, 8, 400);
@@ -449,6 +487,38 @@ export class Engine {
     if (!this.playing) this.emitFrame();
     this.recRaf = requestAnimationFrame(this.recTick);
   };
+
+  /* ── グループバス ──────────────────────────────────────────────────── */
+
+  /** トラックの出口（pan）を、割り当てに従ってバスか Master に繋ぎ直す。 */
+  private routeTrack(t: Track): void {
+    try {
+      t.pan.disconnect();
+    } catch {
+      /* 未接続なだけ */
+    }
+    const dest = t.bus && this.busGain ? this.busGain[t.bus] : this.master;
+    if (dest) t.pan.connect(dest);
+  }
+
+  /** バスの割り当て。`null` で外して Master 直結に戻す。再生中も即座に効く。 */
+  setBus(id: string, bus: BusId | null): void {
+    const t = this.find(id);
+    if (!t || t.bus === bus) return;
+    t.bus = bus;
+    this.routeTrack(t);
+    this.say(
+      bus
+        ? `${t.name} → ${BUS_INFO[bus].label}バス（${BUS_INFO[bus].sister}）`
+        : `${t.name} をバスから外しました（Master 直結）`,
+    );
+  }
+
+  setBusVol(bus: BusId, v: number): void {
+    this.busVol[bus] = v;
+    if (this.busGain) this.busGain[bus].gain.value = v;
+    this.emit();
+  }
 
   /* ── ミキサー ──────────────────────────────────────────────────────── */
 
@@ -815,9 +885,9 @@ export class Engine {
     }
   }
 
-  /** ミックスをオフラインで一括レンダーして lastRender に置く。WAV / webm 共用。 */
+  /** ミックスをオフラインで一括レンダーして lastRender に置く。WAV / webm / MP3 共用。 */
   private async renderMix(dur: number): Promise<{ rendered: AudioBuffer; ms: number }> {
-    const { rendered, ms } = await renderMix(this.audio(), this.tracks, this.masterVol, dur);
+    const { rendered, ms } = await renderMix(this.audio(), this.tracks, this.masterVol, this.busVol, dur);
     this.telemetry = { ...this.telemetry, offline: `${ms.toFixed(0)} ms`, offlineOk: true };
     this.lastRender = rendered;
     return { rendered, ms };
@@ -856,6 +926,40 @@ export class Engine {
       this.say(`webm の書き出しに失敗しました: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       this.webmBusy = false;
+      this.emit();
+    }
+  }
+
+  /**
+   * MP3（LAME / WASM）の書き出し（#20）。オフラインの一括レンダー →
+   * Worker 内の WASM でエンコード。webm（実時間）と違いどちらも実時間より
+   * 速い想定で、**「エンコードを足しても書き出しは数百倍速のままか」を
+   * 実測するのがこの機能の目的**。結果はテレメトリと README に残す。
+   */
+  async bounceMp3(): Promise<void> {
+    const dur = this.total();
+    if (!dur || this.bouncing || this.mp3Busy) return;
+    this.audio();
+    this.mp3Busy = true;
+    this.say("MP3 書き出し: まずミックスをレンダーしています …");
+    try {
+      const { rendered, ms: renderMs } = await this.renderMix(dur);
+      this.say("MP3 書き出し: WASM（LAME）でエンコード中 …");
+      const { bytes, ms: encodeMs } = await encodeMp3InWorker(rendered);
+      const blob = new Blob([bytes], { type: "audio/mpeg" });
+      const rt = (dur / (encodeMs / 1000)).toFixed(0);
+      this.telemetry = { ...this.telemetry, mp3: `${encodeMs.toFixed(0)} ms（約${rt}倍速）` };
+      const size = (blob.size / 1048576).toFixed(2);
+      const ok = await deliverBlob(blob, "prism-river-mix.mp3");
+      this.say(
+        ok
+          ? `MP3 を書き出しました: ${dur.toFixed(2)}s / ${size}MB（CBR ${MP3_KBPS}kbps）。レンダー ${renderMs.toFixed(0)}ms + エンコード ${encodeMs.toFixed(0)}ms — エンコードは実時間の約${rt}倍速。`
+          : `MP3 のエンコードは完了（${size}MB / 実時間の約${rt}倍速）。ただしこのビューではファイル保存が使えません。`,
+      );
+    } catch (err) {
+      this.say(`MP3 の書き出しに失敗しました: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      this.mp3Busy = false;
       this.emit();
     }
   }

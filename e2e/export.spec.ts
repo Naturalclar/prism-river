@@ -59,3 +59,31 @@ test("webm 書き出しで Opus のファイルが降りてくる", async ({ pag
 
   await expect(page.getByTestId("probe-webm")).toContainText("実時間");
 });
+
+/* #20: MP3（LAME / WASM）のオフライン書き出し。webm と違い実時間はかからない。 */
+test("MP3 で書き出すと WASM エンコードの計測値が出る", async ({ page }) => {
+  await load(page, [makeTone("mp1.wav", 440, 3), makeTone("mp2.wav", 550, 3)]);
+
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "MP3 で書き出す", exact: true }).click();
+  await expect(page.getByTestId("log")).toContainText("MP3 を書き出しました", { timeout: 20_000 });
+
+  const d = await download;
+  expect(d.suggestedFilename()).toBe("prism-river-mix.mp3");
+  const file = await d.path();
+  if (!file) throw new Error("download path unavailable");
+  const bytes = readFileSync(file);
+
+  /* ヘッダ: ID3v2 タグ、または MPEG フレーム同期（0xFF + 上位3bit）。 */
+  const sync = bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0;
+  const id3 = bytes.subarray(0, 3).toString() === "ID3";
+  expect(sync || id3).toBe(true);
+
+  /* CBR 192kbps の3秒 ≈ 72KB。同じ尺の WAV（≈0.5MB）より桁で小さい。 */
+  expect(bytes.length).toBeGreaterThan(40_000);
+  expect(bytes.length).toBeLessThan(150_000);
+
+  /* エンコード時間のテレメトリが埋まり、実時間より速い（=1倍超）と表示される。 */
+  await expect(page.getByTestId("probe-mp3")).toContainText("ms");
+  await expect(page.getByTestId("probe-mp3")).toContainText("倍速");
+});

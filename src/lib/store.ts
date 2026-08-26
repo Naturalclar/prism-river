@@ -28,6 +28,16 @@ export const defaultFxMeta = (): FxMeta => ({
   comp: { on: false, threshold: -24, ratio: 4, attack: 0.003, release: 0.25 },
 });
 
+/**
+ * グループバスの3系統。騒霊三姉妹の編成（弦=ルナサ / 管=メルラン / 鍵盤=リリカ）
+ * をそのまま借りた呼び名で、装飾ではないので増減させない（HANDOFF「命名と構造」）。
+ * Engine もこの型を使う（store は React にも Engine にも依存しないのでここが置き場所）。
+ */
+export type BusId = "strings" | "winds" | "keys";
+export const BUS_IDS: readonly BusId[] = ["strings", "winds", "keys"];
+
+export type BusVols = Record<BusId, number>;
+
 export type TrackMeta = {
   name: string;
   /** 元ファイル名（拡張子つき）。復元時の表示と再保存に使う。 */
@@ -43,6 +53,8 @@ export type TrackMeta = {
   fadeOut: number;
   fx: FxMeta;
   color: string;
+  /** 割り当てバス。無印（バス導入前の保存）と null は Master 直結。 */
+  bus?: BusId | null;
 };
 
 export type ProjectMeta = {
@@ -50,6 +62,8 @@ export type ProjectMeta = {
   savedAt: number;
   masterVol: number;
   pxPerSec: number;
+  /** バス音量。無印（バス導入前の保存）は全バス 1.0 扱い。 */
+  busVol?: BusVols;
   tracks: TrackMeta[];
 };
 
@@ -96,8 +110,16 @@ function isTrackMetaBase(v: unknown): v is Omit<TrackMeta, "fx"> & { fx?: unknow
     num(t.trimStart) &&
     num(t.trimEnd) &&
     num(t.fadeIn) &&
-    num(t.fadeOut)
+    num(t.fadeOut) &&
+    /* バス導入前の保存には無いフィールドなので、欠けていてもよい。 */
+    (t.bus === undefined || t.bus === null || BUS_IDS.includes(t.bus as BusId))
   );
+}
+
+function isBusVols(v: unknown): v is BusVols {
+  if (typeof v !== "object" || v === null) return false;
+  const b = v as Record<string, unknown>;
+  return BUS_IDS.every((id) => num(b[id]));
 }
 
 /**
@@ -117,6 +139,7 @@ export function decodeMeta(json: string | null): ProjectMeta | null {
   const m = v as Record<string, unknown>;
   if (m.version !== 1 && m.version !== PROJECT_VERSION) return null;
   if (!num(m.savedAt) || !num(m.masterVol) || !num(m.pxPerSec)) return null;
+  if (m.busVol !== undefined && !isBusVols(m.busVol)) return null;
   if (!Array.isArray(m.tracks) || !m.tracks.every(isTrackMetaBase)) return null;
   if (m.version === PROJECT_VERSION && !m.tracks.every((t) => isFxMeta(t.fx))) return null;
   return {
@@ -124,6 +147,7 @@ export function decodeMeta(json: string | null): ProjectMeta | null {
     savedAt: m.savedAt,
     masterVol: m.masterVol,
     pxPerSec: m.pxPerSec,
+    ...(m.busVol !== undefined ? { busVol: m.busVol as BusVols } : {}),
     /* JSON.parse 直後の自前オブジェクトなので、fx の補完はその場に書いてよい。 */
     tracks: m.tracks.map((t) => Object.assign(t, { fx: isFxMeta(t.fx) ? t.fx : defaultFxMeta() })),
   };

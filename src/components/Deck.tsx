@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import { engine } from "../audio/instance";
-import type { Snapshot } from "../audio/engine";
+import { BUS_IDS, BUS_INFO, type Snapshot } from "../audio/engine";
 import { Clock } from "./Clock";
 import { Meters } from "./Meters";
 
@@ -94,6 +94,27 @@ export function Deck({ snap, savedAt, storeBusy, onSave, onRestore, onDiscard }:
         <Meters />
       </div>
 
+      {/* バスのサブミックス音量。トラック側の割り当てはヘッダの 弦/管/鍵盤。 */}
+      <div className="pot buses">
+        <label>Bus</label>
+        {BUS_IDS.map((b) => (
+          <div className="buspot" key={b} title={`${BUS_INFO[b].label}バス（${BUS_INFO[b].sister}）`}>
+            <span style={{ color: BUS_INFO[b].color }}>{BUS_INFO[b].label}</span>
+            <input
+              type="range"
+              id={`busvol-${b}`}
+              min={0}
+              max={1.4}
+              step={0.01}
+              value={snap.busVol[b]}
+              style={{ width: 48 }}
+              aria-label={`${BUS_INFO[b].label}バス（${BUS_INFO[b].sister}）の音量`}
+              onChange={(e) => engine.setBusVol(b, e.currentTarget.valueAsNumber)}
+            />
+          </div>
+        ))}
+      </div>
+
       <div className="pot">
         <label htmlFor="zoom">Zoom</label>
         <input
@@ -128,6 +149,14 @@ export function Deck({ snap, savedAt, storeBusy, onSave, onRestore, onDiscard }:
           onClick={() => void engine.bounceWebm()}
         >
           {snap.webmBusy ? "webm 書き出し中 …" : "webm で書き出す"}
+        </button>
+        <button
+          className="ghost"
+          disabled={idle || snap.bouncing || snap.mp3Busy}
+          title="WASM（LAME）でオフラインエンコードする。実時間はかからない"
+          onClick={() => void engine.bounceMp3()}
+        >
+          {snap.mp3Busy ? "MP3 書き出し中 …" : "MP3 で書き出す"}
         </button>
         {snap.hasRender && (
           <button className="ghost" onClick={() => engine.audition()}>

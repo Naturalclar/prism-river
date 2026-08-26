@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import { engine } from "../audio/instance";
-import type { TrackView } from "../audio/engine";
+import { BUS_IDS, BUS_INFO, type TrackView } from "../audio/engine";
 import { panLabel } from "../lib/time";
 
 export function TrackHead({ t, fxOpen }: { t: TrackView; fxOpen: boolean }) {
@@ -55,6 +55,24 @@ export function TrackHead({ t, fxOpen }: { t: TrackView; fxOpen: boolean }) {
         >
           ✕
         </button>
+      </div>
+
+      {/* グループバスの割り当て。もう一度押すと外れて Master 直結に戻る。 */}
+      <div className="bus-pick" role="group" aria-label={`${t.name} のバス`}>
+        {BUS_IDS.map((b) => (
+          <button
+            key={b}
+            className="bus-seg"
+            style={{ "--bc": BUS_INFO[b].color } as CSSProperties}
+            aria-pressed={t.bus === b}
+            title={`${BUS_INFO[b].label}バス（${BUS_INFO[b].sister}）`}
+            aria-label={`${t.name} を${BUS_INFO[b].label}バスへ`}
+            data-testid={`bus-${b}`}
+            onClick={() => engine.setBus(t.id, t.bus === b ? null : b)}
+          >
+            {BUS_INFO[b].label}
+          </button>
+        ))}
       </div>
 
       <div className="head-pot">

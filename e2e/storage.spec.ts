@@ -30,6 +30,9 @@ test("プロジェクトを保存してリロード後に復元できる", async
   await page.getByTestId("fx-comp").click();
   await expect(page.getByTestId("fxpanel")).toContainText("-6 dB");
 
+  /* バスの割り当ても保存対象（#13）。 */
+  await page.getByTestId("track-head").first().getByTestId("bus-keys").click();
+
   await page.getByRole("button", { name: "プロジェクトを保存", exact: true }).click();
   await expect(page.getByTestId("log")).toContainText("プロジェクトを保存しました");
 
@@ -41,6 +44,9 @@ test("プロジェクトを保存してリロード後に復元できる", async
   await expect(page.getByTestId("track-head")).toHaveCount(2);
   await expect(page.getByTestId("track-head").first()).toContainText("keep1");
   await expect(page.getByTestId("track-head").first()).toContainText("50");
+  await expect(
+    page.getByTestId("track-head").first().getByTestId("bus-keys"),
+  ).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".clock i")).toHaveText("/ 00:04.00");
   await expect(page.getByTestId("probe-dec")).toContainText("ms");
 

@@ -1,11 +1,19 @@
 import type { Peaks } from "../lib/peaks";
+import type { BusId, BusVols } from "../lib/store";
 
 /* 先頭3色は騒霊三姉妹。弦=ルナサ / 管=メルラン / 鍵盤=リリカ。
    4本目以降は同系統から外して、隣り合うトラックが混ざらないようにする。 */
 export const HUE = ["#6E8FD4", "#E8735A", "#A585D6", "#E0A93B", "#63BE8C", "#D66FA0"];
 
-export const LANE_H = 88;
+export const LANE_H = 110;
 export const CLIP_PAD = 6;
+
+/** バスの表示情報。色は HUE の先頭3色＝三姉妹の色をそのまま使う。 */
+export const BUS_INFO: Record<BusId, { label: string; sister: string; color: string }> = {
+  strings: { label: "弦", sister: "ルナサ", color: HUE[0] },
+  winds: { label: "管", sister: "メルラン", color: HUE[1] },
+  keys: { label: "鍵盤", sister: "リリカ", color: HUE[2] },
+};
 
 /** トラックエフェクトのパラメータ。プレーンなデータで、ノードとは分離。 */
 export type TrackFx = {
@@ -42,6 +50,8 @@ export type Track = {
   fadeOut: number;
   /** 再生セッションごとに作るフェード用 GainNode。停止時に外す。 */
   fade: GainNode | null;
+  /** 割り当てバス。null は Master 直結（既定）。 */
+  bus: BusId | null;
   fx: TrackFx;
   /** リアルタイム側の常設エフェクトノード。パラメータはライブで触る。 */
   fxLow: BiquadFilterNode;
@@ -70,6 +80,7 @@ export type TrackView = {
   /** フェードの長さ（秒）。 */
   fadeIn: number;
   fadeOut: number;
+  bus: BusId | null;
   fx: TrackFx;
   /** ミュート、または他がソロ中で自分はソロでない。 */
   dimmed: boolean;
@@ -85,6 +96,8 @@ export type Telemetry = {
   offline: string;
   offlineOk: boolean;
   webm: string;
+  /** MP3（LAME / WASM）のエンコード時間と倍率。#20 の計測対象。 */
+  mp3: string;
 };
 
 export type Snapshot = {
@@ -94,6 +107,7 @@ export type Snapshot = {
   looping: boolean;
   duration: number;
   masterVol: number;
+  busVol: BusVols;
   /** FX パネルを開いているトラック。無ければ null。 */
   fxId: string | null;
   telemetry: Telemetry;
@@ -104,6 +118,8 @@ export type Snapshot = {
   recording: boolean;
   /** webm の実時間書き出し中。 */
   webmBusy: boolean;
+  /** MP3（WASM）の書き出し中。 */
+  mp3Busy: boolean;
 };
 
 export type Downloads = { save(o: { filename: string; data: Blob }): Promise<void> };

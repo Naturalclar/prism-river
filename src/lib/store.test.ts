@@ -78,4 +78,30 @@ describe("decodeMeta", () => {
   it("tracks が配列でなければ null", () => {
     expect(decodeMeta(JSON.stringify({ ...meta, tracks: {} }))).toBeNull();
   });
+
+  /* バス（#13）はバージョンを上げずに足したので、無くても有っても読める。 */
+  it("bus と busVol が無い保存（バス導入前）も読める", () => {
+    expect(decodeMeta(encodeMeta(meta))).toEqual(meta);
+  });
+
+  it("bus と busVol 付きの保存が往復で同じ値に戻る", () => {
+    const withBus: ProjectMeta = {
+      ...meta,
+      busVol: { strings: 1, winds: 0.5, keys: 1.2 },
+      tracks: [{ ...track, bus: "strings" }, { ...track, bus: null }],
+    };
+    expect(decodeMeta(encodeMeta(withBus))).toEqual(withBus);
+  });
+
+  it("bus が3系統以外の値なら null", () => {
+    const json = JSON.stringify({ ...meta, tracks: [{ ...track, bus: "drums" }] });
+    expect(decodeMeta(json)).toBeNull();
+  });
+
+  it("busVol に数でない値・欠けたバスがあれば null", () => {
+    expect(
+      decodeMeta(JSON.stringify({ ...meta, busVol: { strings: 1, winds: "0.5", keys: 1 } })),
+    ).toBeNull();
+    expect(decodeMeta(JSON.stringify({ ...meta, busVol: { strings: 1 } }))).toBeNull();
+  });
 });

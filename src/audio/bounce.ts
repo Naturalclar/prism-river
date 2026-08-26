@@ -1,3 +1,4 @@
+import { BUS_IDS, type BusId, type BusVols } from "../lib/store";
 import { buildFxChain, scheduleFades } from "./graph";
 import type { Downloads, Track } from "./types";
 
@@ -13,6 +14,7 @@ export async function renderMix(
   ctx: AudioContext,
   tracks: Track[],
   masterVol: number,
+  busVol: BusVols,
   dur: number,
 ): Promise<{ rendered: AudioBuffer; ms: number }> {
   const t0 = performance.now();
@@ -21,6 +23,14 @@ export async function renderMix(
   const mg = off.createGain();
   mg.gain.value = masterVol;
   mg.connect(off.destination);
+  /* リアルタイム側と同じバス構造をオフラインにも組む。 */
+  const busG = {} as Record<BusId, GainNode>;
+  for (const bus of BUS_IDS) {
+    const g = off.createGain();
+    g.gain.value = busVol[bus];
+    g.connect(mg);
+    busG[bus] = g;
+  }
   const solo = tracks.some((t) => t.solo);
   for (const t of tracks) {
     if (t.mute || (solo && !t.solo)) continue;
@@ -48,7 +58,7 @@ export async function renderMix(
     } else {
       g.connect(p);
     }
-    p.connect(mg);
+    p.connect(t.bus ? busG[t.bus] : mg);
     s.start(t.offset, t.trimStart, eff);
   }
   const rendered = await off.startRendering();
