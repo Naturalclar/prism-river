@@ -17,7 +17,8 @@
   },
   "dependencies": {
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "wasm-media-encoders": "^0.7.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.50.0",
