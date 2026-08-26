@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 import { makeTone } from "./fixture";
 
@@ -15,6 +16,20 @@ async function setZoom(page: Page, value: number) {
     set?.call(el, String(v));
     el.dispatchEvent(new Event("input", { bubbles: true }));
   }, value);
+}
+
+/* 書き出された WAV の指定区間のピーク振幅（int16 の絶対値）。 */
+function wavWindowPeak(path: string, fromSec: number, toSec: number): number {
+  const buf = readFileSync(path);
+  const v = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const sr = v.getUint32(24, true);
+  const ch = v.getUint16(22, true);
+  const n = Math.floor((buf.byteLength - 44) / 2);
+  const a = Math.min(n, Math.floor(fromSec * sr) * ch);
+  const b = Math.min(n, Math.floor(toSec * sr) * ch);
+  let peak = 0;
+  for (let i = a; i < b; i++) peak = Math.max(peak, Math.abs(v.getInt16(44 + i * 2, true)));
+  return peak;
 }
 
 /* タイル canvas の中央行を読んで、描画済みかどうかを見る。未描画（width=0）は 0。 */
@@ -221,6 +236,34 @@ test("クリップの左右端ドラッグでトリムできる", async ({ page 
   await page.getByRole("button", { name: "ミックスを書き出す", exact: true }).click();
   await expect(page.getByTestId("log")).toContainText("書き出しました", { timeout: 15_000 });
   expect((await download).suggestedFilename()).toBe("prism-river-mix.wav");
+});
+
+test("フェードアウトが書き出しに効く", async ({ page }) => {
+  await load(page, [makeTone("fade.wav", 440, 2)]);
+  const box = await page.getByTestId("clip").boundingBox();
+  if (!box) throw new Error("clip not found");
+
+  /* 右上のフェードハンドルを左端までドラッグ → フェードアウト 2 秒。 */
+  const hx = box.x + box.width - 3;
+  const hy = box.y + 5;
+  await page.mouse.move(hx, hy);
+  await page.mouse.down();
+  await page.mouse.move(hx - 140, hy, { steps: 5 });
+  await page.mouse.up();
+  await expect(page.getByTestId("log")).toContainText("アウト 2.00s");
+
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "ミックスを書き出す", exact: true }).click();
+  const file = await (await download).path();
+  if (!file) throw new Error("download path unavailable");
+
+  /* 音源は 0.5s ごとに同じ振幅でアタックを打ち直すので、素の書き出しなら
+     0.5s 付近と 1.5s 付近のピークはほぼ同じ。線形フェードアウトが効いて
+     いれば 1.5s 時点のゲインは 0.25 になり、比がはっきり開く。 */
+  const head = wavWindowPeak(file, 0.45, 0.65);
+  const tail = wavWindowPeak(file, 1.45, 1.65);
+  expect(head).toBeGreaterThan(3000);
+  expect(tail).toBeLessThan(head * 0.5);
 });
 
 test("トラックを消すと空の案内に戻る", async ({ page }) => {
