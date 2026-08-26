@@ -1,6 +1,12 @@
 import { clampFades, rampSegment, type Ramp } from "../lib/fade";
 import { computePeaks, type Peaks } from "../lib/peaks";
-import { PROJECT_VERSION, type ProjectMeta } from "../lib/store";
+import {
+  BUS_IDS,
+  PROJECT_VERSION,
+  type BusId,
+  type BusVols,
+  type ProjectMeta,
+} from "../lib/store";
 import { clamp } from "../lib/time";
 import { trimEndTo, trimStartTo } from "../lib/trim";
 import { encodeWav } from "../lib/wav";
@@ -9,8 +15,17 @@ import { encodeWav } from "../lib/wav";
    4本目以降は同系統から外して、隣り合うトラックが混ざらないようにする。 */
 export const HUE = ["#6E8FD4", "#E8735A", "#A585D6", "#E0A93B", "#63BE8C", "#D66FA0"];
 
-export const LANE_H = 88;
+export const LANE_H = 110;
 export const CLIP_PAD = 6;
+
+export { BUS_IDS, type BusId } from "../lib/store";
+
+/** バスの表示情報。色は HUE の先頭3色＝三姉妹の色をそのまま使う。 */
+export const BUS_INFO: Record<BusId, { label: string; sister: string; color: string }> = {
+  strings: { label: "弦", sister: "ルナサ", color: HUE[0] },
+  winds: { label: "管", sister: "メルラン", color: HUE[1] },
+  keys: { label: "鍵盤", sister: "リリカ", color: HUE[2] },
+};
 
 /* EQ の固定周波数。まずは3バンドで十分（低棚 / ピーキング / 高棚）。 */
 const EQ_LOW_HZ = 200;
@@ -53,6 +68,8 @@ export type Track = {
   fadeOut: number;
   /** 再生セッションごとに作るフェード用 GainNode。停止時に外す。 */
   fade: GainNode | null;
+  /** 割り当てバス。null は Master 直結（既定）。 */
+  bus: BusId | null;
   fx: TrackFx;
   /** リアルタイム側の常設エフェクトノード。パラメータはライブで触る。 */
   fxLow: BiquadFilterNode;
@@ -81,6 +98,7 @@ export type TrackView = {
   /** フェードの長さ（秒）。 */
   fadeIn: number;
   fadeOut: number;
+  bus: BusId | null;
   fx: TrackFx;
   /** ミュート、または他がソロ中で自分はソロでない。 */
   dimmed: boolean;
@@ -105,6 +123,7 @@ export type Snapshot = {
   looping: boolean;
   duration: number;
   masterVol: number;
+  busVol: BusVols;
   /** FX パネルを開いているトラック。無ければ null。 */
   fxId: string | null;
   telemetry: Telemetry;
@@ -190,6 +209,9 @@ function rms(node: AnalyserNode, buf: Uint8Array<ArrayBuffer>): number {
 export class Engine {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
+  /** グループバス。トラックは pan → busGain → master。作成は audio() で。 */
+  private busGain: Record<BusId, GainNode> | null = null;
+  private busVol: BusVols = { strings: 1, winds: 1, keys: 1 };
   private analyser: {
     L: AnalyserNode;
     R: AnalyserNode;
@@ -281,6 +303,7 @@ export class Engine {
         trimStart: t.trimStart,
         fadeIn: t.fadeIn,
         fadeOut: t.fadeOut,
+        bus: t.bus,
         fx: { eq: { ...t.fx.eq }, comp: { ...t.fx.comp } },
         dimmed: t.mute || (solo && !t.solo),
         selected: t.id === this.selectedId,
@@ -290,6 +313,7 @@ export class Engine {
       looping: this.looping,
       duration: this.total(),
       masterVol: this.masterVol,
+      busVol: { ...this.busVol },
       fxId: this.fxId,
       telemetry: this.telemetry,
       message: this.message,
@@ -324,6 +348,17 @@ export class Engine {
     splitter.connect(aL, 0);
     splitter.connect(aR, 1);
     master.connect(ctx.destination);
+
+    /* グループバス3系統。将来のバスエフェクト（#12 と同型）は
+       busGain と master の間に挿す。 */
+    const busGain = {} as Record<BusId, GainNode>;
+    for (const b of BUS_IDS) {
+      const g = ctx.createGain();
+      g.gain.value = this.busVol[b];
+      g.connect(master);
+      busGain[b] = g;
+    }
+    this.busGain = busGain;
 
     this.ctx = ctx;
     this.master = master;
@@ -417,6 +452,7 @@ export class Engine {
       fadeIn: 0,
       fadeOut: 0,
       fade: null,
+      bus: null,
       fx: defaultFx(),
       fxLow,
       fxMid,
@@ -512,6 +548,7 @@ export class Engine {
         savedAt: Date.now(),
         masterVol: this.masterVol,
         pxPerSec: this.pxPerSec,
+        busVol: { ...this.busVol },
         tracks: this.tracks.map((t) => ({
           name: t.name,
           srcName: t.srcName,
@@ -526,6 +563,7 @@ export class Engine {
           fadeOut: t.fadeOut,
           fx: { eq: { ...t.fx.eq }, comp: { ...t.fx.comp } },
           color: t.color,
+          bus: t.bus,
         })),
       },
       blobs: this.tracks.map((t) => t.srcBytes),
@@ -569,8 +607,15 @@ export class Engine {
       t.fadeOut = clamp(m.fadeOut, 0, Math.max(0, eff - t.fadeIn));
       this.applyFx(t, m.fx);
       t.color = m.color;
+      t.bus = m.bus ?? null;
+      this.routeTrack(t);
     }
     this.nextHue = this.tracks.length;
+    for (const b of BUS_IDS) {
+      /* バス導入前の保存には busVol が無い。その場合は素通し（1.0）。 */
+      this.busVol[b] = clamp(meta.busVol?.[b] ?? 1, 0, 1.4);
+      if (this.busGain) this.busGain[b].gain.value = this.busVol[b];
+    }
     this.masterVol = clamp(meta.masterVol, 0, 1.4);
     if (this.master) this.master.gain.value = this.masterVol;
     this.pxPerSec = clamp(meta.pxPerSec, 8, 400);
@@ -683,6 +728,38 @@ export class Engine {
     if (!this.playing) this.emitFrame();
     this.recRaf = requestAnimationFrame(this.recTick);
   };
+
+  /* ── グループバス ──────────────────────────────────────────────────── */
+
+  /** トラックの出口（pan）を、割り当てに従ってバスか Master に繋ぎ直す。 */
+  private routeTrack(t: Track): void {
+    try {
+      t.pan.disconnect();
+    } catch {
+      /* 未接続なだけ */
+    }
+    const dest = t.bus && this.busGain ? this.busGain[t.bus] : this.master;
+    if (dest) t.pan.connect(dest);
+  }
+
+  /** バスの割り当て。`null` で外して Master 直結に戻す。再生中も即座に効く。 */
+  setBus(id: string, bus: BusId | null): void {
+    const t = this.find(id);
+    if (!t || t.bus === bus) return;
+    t.bus = bus;
+    this.routeTrack(t);
+    this.say(
+      bus
+        ? `${t.name} → ${BUS_INFO[bus].label}バス（${BUS_INFO[bus].sister}）`
+        : `${t.name} をバスから外しました（Master 直結）`,
+    );
+  }
+
+  setBusVol(bus: BusId, v: number): void {
+    this.busVol[bus] = v;
+    if (this.busGain) this.busGain[bus].gain.value = v;
+    this.emit();
+  }
 
   /* ── ミキサー ──────────────────────────────────────────────────────── */
 
@@ -1081,6 +1158,14 @@ export class Engine {
     const mg = off.createGain();
     mg.gain.value = this.masterVol;
     mg.connect(off.destination);
+    /* リアルタイム側と同じバス構造をオフラインにも組む。 */
+    const busG = {} as Record<BusId, GainNode>;
+    for (const b of BUS_IDS) {
+      const g = off.createGain();
+      g.gain.value = this.busVol[b];
+      g.connect(mg);
+      busG[b] = g;
+    }
     const solo = this.tracks.some((t) => t.solo);
     for (const t of this.tracks) {
       if (t.mute || (solo && !t.solo)) continue;
@@ -1108,7 +1193,7 @@ export class Engine {
       } else {
         g.connect(p);
       }
-      p.connect(mg);
+      p.connect(t.bus ? busG[t.bus] : mg);
       s.start(t.offset, t.trimStart, eff);
     }
     const rendered = await off.startRendering();
