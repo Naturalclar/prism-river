@@ -13,8 +13,20 @@
  * `ProjectMeta` + `Blob[]` だけで、ストレージの都合はこのモジュールに閉じる。
  */
 
-/** 保存形式のバージョン。トリム等の将来フィールドの追加時に上げる。 */
-export const PROJECT_VERSION = 1;
+/** 保存形式のバージョン。フィールドの追加時に上げる（v2: fx を追加）。 */
+export const PROJECT_VERSION = 2;
+
+/** トラックエフェクト。engine.ts の TrackFx と構造互換（循環 import を避けて別定義）。 */
+export type FxMeta = {
+  eq: { low: number; mid: number; high: number };
+  comp: { on: boolean; threshold: number; ratio: number; attack: number; release: number };
+};
+
+/** v1 の保存データ（fx 無し）を読むときの補完値。engine の既定と同じ。 */
+export const defaultFxMeta = (): FxMeta => ({
+  eq: { low: 0, mid: 0, high: 0 },
+  comp: { on: false, threshold: -24, ratio: 4, attack: 0.003, release: 0.25 },
+});
 
 export type TrackMeta = {
   name: string;
@@ -29,6 +41,7 @@ export type TrackMeta = {
   trimEnd: number;
   fadeIn: number;
   fadeOut: number;
+  fx: FxMeta;
   color: string;
 };
 
@@ -50,7 +63,25 @@ const num = (v: unknown): v is number => typeof v === "number" && Number.isFinit
 const str = (v: unknown): v is string => typeof v === "string";
 const bool = (v: unknown): v is boolean => typeof v === "boolean";
 
-function isTrackMeta(v: unknown): v is TrackMeta {
+function isFxMeta(v: unknown): v is FxMeta {
+  if (typeof v !== "object" || v === null) return false;
+  const f = v as { eq?: Record<string, unknown>; comp?: Record<string, unknown> };
+  if (typeof f.eq !== "object" || f.eq === null) return false;
+  if (typeof f.comp !== "object" || f.comp === null) return false;
+  return (
+    num(f.eq.low) &&
+    num(f.eq.mid) &&
+    num(f.eq.high) &&
+    bool(f.comp.on) &&
+    num(f.comp.threshold) &&
+    num(f.comp.ratio) &&
+    num(f.comp.attack) &&
+    num(f.comp.release)
+  );
+}
+
+/** fx を除く共通フィールド（v1 / v2 で同じ部分）。 */
+function isTrackMetaBase(v: unknown): v is Omit<TrackMeta, "fx"> & { fx?: unknown } {
   if (typeof v !== "object" || v === null) return false;
   const t = v as Record<string, unknown>;
   return (
@@ -71,6 +102,7 @@ function isTrackMeta(v: unknown): v is TrackMeta {
 
 /**
  * 保存されていた JSON を検証して返す。壊れている・版が合わない場合は null。
+ * v1（fx 無し）は fx を既定値で補って読む（既存の保存データを壊さない）。
  * 例外は投げない（起動時に毎回通る道なので、失敗は「保存なし」に倒す）。
  */
 export function decodeMeta(json: string | null): ProjectMeta | null {
@@ -83,10 +115,18 @@ export function decodeMeta(json: string | null): ProjectMeta | null {
   }
   if (typeof v !== "object" || v === null) return null;
   const m = v as Record<string, unknown>;
-  if (m.version !== PROJECT_VERSION) return null;
+  if (m.version !== 1 && m.version !== PROJECT_VERSION) return null;
   if (!num(m.savedAt) || !num(m.masterVol) || !num(m.pxPerSec)) return null;
-  if (!Array.isArray(m.tracks) || !m.tracks.every(isTrackMeta)) return null;
-  return m as unknown as ProjectMeta;
+  if (!Array.isArray(m.tracks) || !m.tracks.every(isTrackMetaBase)) return null;
+  if (m.version === PROJECT_VERSION && !m.tracks.every((t) => isFxMeta(t.fx))) return null;
+  return {
+    version: PROJECT_VERSION,
+    savedAt: m.savedAt,
+    masterVol: m.masterVol,
+    pxPerSec: m.pxPerSec,
+    /* JSON.parse 直後の自前オブジェクトなので、fx の補完はその場に書いてよい。 */
+    tracks: m.tracks.map((t) => Object.assign(t, { fx: isFxMeta(t.fx) ? t.fx : defaultFxMeta() })),
+  };
 }
 
 /* ── ストレージ本体 ───────────────────────────────────────────────────── */

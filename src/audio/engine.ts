@@ -515,6 +515,7 @@ export class Engine {
           trimEnd: t.trimEnd,
           fadeIn: t.fadeIn,
           fadeOut: t.fadeOut,
+          fx: { eq: { ...t.fx.eq }, comp: { ...t.fx.comp } },
           color: t.color,
         })),
       },
@@ -557,6 +558,7 @@ export class Engine {
       const eff = t.trimEnd - t.trimStart;
       t.fadeIn = clamp(m.fadeIn, 0, eff);
       t.fadeOut = clamp(m.fadeOut, 0, Math.max(0, eff - t.fadeIn));
+      this.applyFx(t, m.fx);
       t.color = m.color;
     }
     this.nextHue = this.tracks.length;
@@ -802,6 +804,25 @@ export class Engine {
     t.fx.comp[key] = v;
     t.fxComp[key].value = v;
     this.emit();
+  }
+
+  /**
+   * 復元した fx を今の実装の範囲にクランプして、データと常設ノードの両方へ
+   * 反映する。データを代入するだけではノードに乗らないので必ずここを通す。
+   */
+  private applyFx(t: Track, fx: TrackFx): void {
+    t.fx.eq.low = clamp(fx.eq.low, -12, 12);
+    t.fx.eq.mid = clamp(fx.eq.mid, -12, 12);
+    t.fx.eq.high = clamp(fx.eq.high, -12, 12);
+    t.fxLow.gain.value = t.fx.eq.low;
+    t.fxMid.gain.value = t.fx.eq.mid;
+    t.fxHigh.gain.value = t.fx.eq.high;
+    t.fx.comp.threshold = clamp(fx.comp.threshold, -60, 0);
+    t.fx.comp.ratio = clamp(fx.comp.ratio, 1, 20);
+    t.fx.comp.attack = clamp(fx.comp.attack, 0.001, 0.1);
+    t.fx.comp.release = clamp(fx.comp.release, 0.05, 1);
+    /* 直後の push() ではコンプは未配線（OFF）なので、ON ならトグルで配線する。 */
+    if (fx.comp.on !== t.fx.comp.on) this.toggleComp(t.id);
   }
 
   /** コンプの ON/OFF。素通しを保証するため、OFF は配線ごと外す。 */

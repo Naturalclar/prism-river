@@ -314,6 +314,12 @@ test("プロジェクトを保存してリロード後に復元できる", async
   await page.mouse.up();
   await expect(page.locator(".clock i")).toHaveText("/ 00:04.00");
 
+  /* keep1 に EQ LOW -6dB とコンプ ON を設定（#35: fx も保存対象）。 */
+  await page.getByRole("button", { name: "keep1 のエフェクト", exact: true }).click();
+  await setRange(page, "[data-testid=fx-low]", -6);
+  await page.getByTestId("fx-comp").click();
+  await expect(page.getByTestId("fxpanel")).toContainText("-6 dB");
+
   await page.getByRole("button", { name: "プロジェクトを保存", exact: true }).click();
   await expect(page.getByTestId("log")).toContainText("プロジェクトを保存しました");
 
@@ -327,6 +333,12 @@ test("プロジェクトを保存してリロード後に復元できる", async
   await expect(page.getByTestId("track-head").first()).toContainText("50");
   await expect(page.locator(".clock i")).toHaveText("/ 00:04.00");
   await expect(page.getByTestId("probe-dec")).toContainText("ms");
+
+  /* fx も復元されている（パネルの表示とコンプの ON 状態で確認）。 */
+  await page.getByRole("button", { name: "keep1 のエフェクト", exact: true }).click();
+  await expect(page.getByTestId("fxpanel")).toContainText("-6 dB");
+  await expect(page.getByTestId("fx-comp")).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "エフェクトを閉じる", exact: true }).click();
 
   /* 復元後も再生と書き出しが通る。 */
   await page.getByRole("button", { name: "再生", exact: true }).click();
