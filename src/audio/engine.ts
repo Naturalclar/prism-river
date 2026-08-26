@@ -24,7 +24,9 @@ export { BUS_INFO, CLIP_PAD, HUE, LANE_H } from "./types";
 export { BUS_IDS, type BusId } from "../lib/store";
 export type { Snapshot, Telemetry, Track, TrackFx, TrackView } from "./types";
 
-const AUDIO_EXT = /\.(mp3|wav|m4a|aac|ogg|flac)$/i;
+/* 拡張子は入口の粗い篩。実際に読めるかは decodeAudioData（ブラウザ依存）が決める。
+   opus / oga / webm / weba も通す — 自前の webm 書き出しを読み戻せるように（#22）。 */
+const AUDIO_EXT = /\.(mp3|wav|m4a|aac|ogg|oga|opus|flac|webm|weba)$/i;
 
 /**
  * オーディオ側の状態を全部持つ素のクラス。React の外に置いてあるのは意図的で、
@@ -202,11 +204,16 @@ export class Engine {
   /* ── 読み込み ──────────────────────────────────────────────────────── */
 
   async ingest(files: ArrayLike<File>): Promise<void> {
-    const list = Array.from(files).filter(
-      (f) => f.type.startsWith("audio/") || AUDIO_EXT.test(f.name),
-    );
+    const all = Array.from(files);
+    const list = all.filter((f) => f.type.startsWith("audio/") || AUDIO_EXT.test(f.name));
+    /* 対応外は黙って落とさず、名前を挙げて伝える（#22）。 */
+    const skipped = all.filter((f) => !list.includes(f));
     if (!list.length) {
-      this.say("音声ファイルが見つかりませんでした。");
+      this.say(
+        skipped.length
+          ? `対応外のファイルのみでした: ${skipped.map((f) => f.name).join(" / ")}（読める拡張子: mp3 / wav / m4a / aac / ogg / opus / flac / webm）`
+          : "音声ファイルが見つかりませんでした。",
+      );
       return;
     }
     const ctx = this.audio();
@@ -218,6 +225,9 @@ export class Engine {
          デコード済みの PCM が一度にメモリへ乗る。 */
       // oxlint-disable-next-line no-await-in-loop
       await this.decodeInto(ctx, f);
+    }
+    if (skipped.length) {
+      this.say(`${skipped.length}件を対応外としてスキップ: ${skipped.map((f) => f.name).join(" / ")}`);
     }
     this.refreshTelemetry();
     this.emit();
