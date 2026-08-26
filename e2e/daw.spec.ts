@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 import { makeTone } from "./fixture";
 
@@ -350,6 +350,12 @@ test("プロジェクトを保存してリロード後に復元できる", async
   await page.mouse.up();
   await expect(page.locator(".clock i")).toHaveText("/ 00:04.00");
 
+  /* keep1 に EQ LOW -6dB とコンプ ON を設定（#35: fx も保存対象）。 */
+  await page.getByRole("button", { name: "keep1 のエフェクト", exact: true }).click();
+  await setRange(page, "[data-testid=fx-low]", -6);
+  await page.getByTestId("fx-comp").click();
+  await expect(page.getByTestId("fxpanel")).toContainText("-6 dB");
+
   /* バスの割り当ても保存対象（#13）。 */
   await page.getByTestId("track-head").first().getByTestId("bus-keys").click();
 
@@ -369,6 +375,12 @@ test("プロジェクトを保存してリロード後に復元できる", async
   ).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".clock i")).toHaveText("/ 00:04.00");
   await expect(page.getByTestId("probe-dec")).toContainText("ms");
+
+  /* fx も復元されている（パネルの表示とコンプの ON 状態で確認）。 */
+  await page.getByRole("button", { name: "keep1 のエフェクト", exact: true }).click();
+  await expect(page.getByTestId("fxpanel")).toContainText("-6 dB");
+  await expect(page.getByTestId("fx-comp")).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "エフェクトを閉じる", exact: true }).click();
 
   /* 復元後も再生と書き出しが通る。 */
   await page.getByRole("button", { name: "再生", exact: true }).click();
@@ -432,6 +444,29 @@ test("マイクの権限が拒否されたら分かるメッセージが出る",
   await expect(page.getByTestId("track-head")).toHaveCount(0);
   /* afterEach の「ページ例外ゼロ」も検証対象: reject を握り損ねると
      unhandled rejection がここで出る。 */
+});
+
+/* webm はオフラインの一括レンダーと違い、実時間で再生しながら録る（仕様）。
+   テスト音源を短く保つのはそのため。 */
+test("webm 書き出しで Opus のファイルが降りてくる", async ({ page }) => {
+  await load(page, [makeTone("wm.wav", 440, 2)]);
+
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "webm で書き出す", exact: true }).click();
+  await expect(page.getByTestId("log")).toContainText("webm を書き出しました", {
+    timeout: 20_000,
+  });
+
+  const d = await download;
+  expect(d.suggestedFilename()).toBe("prism-river-mix.webm");
+  const file = await d.path();
+  if (!file) throw new Error("download path unavailable");
+  expect(statSync(file).size).toBeGreaterThan(1000);
+  /* WebM (Matroska) のマジックナンバー 0x1A45DFA3 で始まっている。 */
+  const head = readFileSync(file).subarray(0, 4);
+  expect([...head]).toEqual([0x1a, 0x45, 0xdf, 0xa3]);
+
+  await expect(page.getByTestId("probe-webm")).toContainText("実時間");
 });
 
 test("トラックを消すと空の案内に戻る", async ({ page }) => {
