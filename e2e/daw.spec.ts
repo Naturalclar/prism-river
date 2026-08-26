@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 import { makeTone } from "./fixture";
 
@@ -402,6 +402,29 @@ test("マイクの権限が拒否されたら分かるメッセージが出る",
   await expect(page.getByTestId("track-head")).toHaveCount(0);
   /* afterEach の「ページ例外ゼロ」も検証対象: reject を握り損ねると
      unhandled rejection がここで出る。 */
+});
+
+/* webm はオフラインの一括レンダーと違い、実時間で再生しながら録る（仕様）。
+   テスト音源を短く保つのはそのため。 */
+test("webm 書き出しで Opus のファイルが降りてくる", async ({ page }) => {
+  await load(page, [makeTone("wm.wav", 440, 2)]);
+
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "webm で書き出す", exact: true }).click();
+  await expect(page.getByTestId("log")).toContainText("webm を書き出しました", {
+    timeout: 20_000,
+  });
+
+  const d = await download;
+  expect(d.suggestedFilename()).toBe("prism-river-mix.webm");
+  const file = await d.path();
+  if (!file) throw new Error("download path unavailable");
+  expect(statSync(file).size).toBeGreaterThan(1000);
+  /* WebM (Matroska) のマジックナンバー 0x1A45DFA3 で始まっている。 */
+  const head = readFileSync(file).subarray(0, 4);
+  expect([...head]).toEqual([0x1a, 0x45, 0xdf, 0xa3]);
+
+  await expect(page.getByTestId("probe-webm")).toContainText("実時間");
 });
 
 test("トラックを消すと空の案内に戻る", async ({ page }) => {

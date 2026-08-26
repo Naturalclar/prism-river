@@ -121,6 +121,14 @@ export function Deck({ snap, savedAt, storeBusy, onSave, onRestore, onDiscard }:
         >
           ミックスを書き出す
         </button>
+        <button
+          className="ghost"
+          disabled={idle || snap.bouncing || snap.webmBusy}
+          title="実時間で再生しながら録るので、ミックスの長さぶん時間がかかる"
+          onClick={() => void engine.bounceWebm()}
+        >
+          {snap.webmBusy ? "webm 書き出し中 …" : "webm で書き出す"}
+        </button>
         {snap.hasRender && (
           <button className="ghost" onClick={() => engine.audition()}>
             {snap.auditioning ? "試聴を止める" : "レンダーを試聴"}
