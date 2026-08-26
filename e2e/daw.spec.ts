@@ -76,6 +76,24 @@ test("ミックスを書き出すとオフラインレンダーの計測値が�
   expect(ms).toBeLessThan(2000);
 });
 
+/* 保存経路が失敗しても bouncing が戻り、ボタンが使える状態に復帰する回帰。
+   （Artifact ビューアで capability 取得が reject するケースの再現） */
+test("保存に失敗しても書き出しボタンは無効のままにならない", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.claude = { use: () => Promise.reject(new Error("downloads unavailable")) };
+  });
+  await page.goto("/");
+  await load(page, [makeTone("stuck.wav", 440)]);
+
+  const bounce = page.getByRole("button", { name: "ミックスを書き出す", exact: true });
+  await bounce.click();
+  await expect(page.getByTestId("probe-off")).toContainText("ms", { timeout: 15_000 });
+  await expect(bounce).toBeEnabled();
+  await expect(page.getByTestId("log")).toContainText("ファイル保存が使えない");
+  /* afterEach の「ページ例外ゼロ」も本テストの検証対象:
+     修正前は use() の reject が unhandled rejection になっていた。 */
+});
+
 test("トラックを消すと空の案内に戻る", async ({ page }) => {
   await load(page, [makeTone("gone.wav", 440)]);
   await page.getByRole("button", { name: /削除/ }).click();
