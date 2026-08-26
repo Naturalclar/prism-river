@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.DS_Store
+*.local
+
+# テスト用に置いた音源はコミットしない（権利のあるファイルが混ざるため）
+/samples/
+*.mp3
+*.wav
+*.m4a
+*.flac
