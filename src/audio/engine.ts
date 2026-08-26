@@ -1,4 +1,6 @@
+import { clampFades, rampSegment, type Ramp } from "../lib/fade";
 import { computePeaks, type Peaks } from "../lib/peaks";
+import { clamp } from "../lib/time";
 import { trimEndTo, trimStartTo } from "../lib/trim";
 import { encodeWav } from "../lib/wav";
 
@@ -24,6 +26,11 @@ export type Track = {
   /** バッファ内のトリム範囲（秒）。非破壊で、再生時に範囲指定するだけ。 */
   trimStart: number;
   trimEnd: number;
+  /** フェードの長さ（秒、クリップ実効長基準）。0 で無効。 */
+  fadeIn: number;
+  fadeOut: number;
+  /** 再生セッションごとに作るフェード用 GainNode。停止時に外す。 */
+  fade: GainNode | null;
   color: string;
   decodeMs: number;
   peaks: Peaks | null;
@@ -43,6 +50,9 @@ export type TrackView = {
   duration: number;
   /** バッファ内のトリム開始（秒）。端ドラッグの基準値。 */
   trimStart: number;
+  /** フェードの長さ（秒）。 */
+  fadeIn: number;
+  fadeOut: number;
   /** ミュート、または他がソロ中で自分はソロでない。 */
   dimmed: boolean;
   /** クリックで選択中。Delete キーの削除対象。 */
@@ -177,6 +187,8 @@ export class Engine {
         offset: t.offset,
         duration: t.trimEnd - t.trimStart,
         trimStart: t.trimStart,
+        fadeIn: t.fadeIn,
+        fadeOut: t.fadeOut,
         dimmed: t.mute || (solo && !t.solo),
         selected: t.id === this.selectedId,
       })),
@@ -295,6 +307,9 @@ export class Engine {
       offset: 0,
       trimStart: 0,
       trimEnd: buf.duration,
+      fadeIn: 0,
+      fadeOut: 0,
+      fade: null,
       color: HUE[this.nextHue++ % HUE.length],
       decodeMs: ms,
       peaks: null,
@@ -466,6 +481,52 @@ export class Engine {
     this.emit();
   }
 
+  /* ── フェード ──────────────────────────────────────────────────────── */
+
+  /** フェードハンドルのドラッグ中に呼ぶ。クランプ後の値を返す（DOM 直書き用）。 */
+  fadeTo(id: string, edge: "in" | "out", sec: number): { fadeIn: number; fadeOut: number } | null {
+    const t = this.find(id);
+    if (!t) return null;
+    const eff = t.trimEnd - t.trimStart;
+    if (edge === "in") t.fadeIn = clamp(sec, 0, Math.max(0, eff - t.fadeOut));
+    else t.fadeOut = clamp(sec, 0, Math.max(0, eff - t.fadeIn));
+    return { fadeIn: t.fadeIn, fadeOut: t.fadeOut };
+  }
+
+  /** フェードのドラッグを離したときに呼ぶ。 */
+  commitFade(id: string): void {
+    const t = this.find(id);
+    if (!t) return;
+    this.say(
+      `${t.name} のフェード: イン ${t.fadeIn.toFixed(2)}s / アウト ${t.fadeOut.toFixed(2)}s`,
+    );
+    this.rebuildIfPlaying();
+    this.emit();
+  }
+
+  /**
+   * フェードのランプを AudioParam に張る。`clip0` はクリップ先頭のコンテキスト
+   * 時刻で、途中から再生するときは負や過去になり得る（rampSegment が現在値を
+   * 保って張り直す）。オンライン・オフラインの両コンテキストで同じに使う。
+   */
+  private scheduleFades(
+    p: AudioParam,
+    clip0: number,
+    eff: number,
+    fadeIn: number,
+    fadeOut: number,
+  ): void {
+    const { fi, fo } = clampFades(eff, fadeIn, fadeOut);
+    const segs: (Ramp | null)[] = [];
+    if (fi > 0) segs.push(rampSegment(clip0, 0, clip0 + fi, 1));
+    if (fo > 0) segs.push(rampSegment(clip0 + eff - fo, 1, clip0 + eff, 0));
+    for (const s of segs) {
+      if (!s) continue;
+      p.setValueAtTime(s.v0, s.t0);
+      p.linearRampToValueAtTime(s.v1, s.t1);
+    }
+  }
+
   /** 再生中にクリップの形が変わったら、位置を保ったままソースを組み直す。 */
   private rebuildIfPlaying(): void {
     if (!this.playing) return;
@@ -491,6 +552,14 @@ export class Engine {
   }
 
   private stopSrc(t: Track): void {
+    if (t.fade) {
+      try {
+        t.fade.disconnect();
+      } catch {
+        /* 既に切れている */
+      }
+      t.fade = null;
+    }
     if (!t.src) return;
     try {
       t.src.stop();
@@ -513,7 +582,16 @@ export class Engine {
       if (local >= eff) continue;
       const s = ctx.createBufferSource();
       s.buffer = t.buf;
-      s.connect(t.gain);
+      /* フェードは音量ミキサー（t.gain）とは別の GainNode に張る。 */
+      if (t.fadeIn > 0 || t.fadeOut > 0) {
+        const f = ctx.createGain();
+        this.scheduleFades(f.gain, at - local, eff, t.fadeIn, t.fadeOut);
+        s.connect(f);
+        f.connect(t.gain);
+        t.fade = f;
+      } else {
+        s.connect(t.gain);
+      }
       /* トリムは非破壊なので、start の第2・第3引数でバッファ内の範囲を切る。 */
       if (local >= 0) s.start(at, t.trimStart + local, eff - local);
       else s.start(at - local, t.trimStart, eff);
@@ -614,10 +692,18 @@ export class Engine {
         g.gain.value = t.vol;
         p.pan.value = t.panv;
         s.buffer = t.buf;
-        s.connect(g);
+        const eff = t.trimEnd - t.trimStart;
+        if (t.fadeIn > 0 || t.fadeOut > 0) {
+          const f = off.createGain();
+          this.scheduleFades(f.gain, t.offset, eff, t.fadeIn, t.fadeOut);
+          s.connect(f);
+          f.connect(g);
+        } else {
+          s.connect(g);
+        }
         g.connect(p);
         p.connect(mg);
-        s.start(t.offset, t.trimStart, t.trimEnd - t.trimStart);
+        s.start(t.offset, t.trimStart, eff);
       }
       const rendered = await off.startRendering();
       const ms = performance.now() - t0;

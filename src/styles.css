@@ -169,6 +169,15 @@ input[type=range]::-moz-range-thumb{
 .clip .grip.l{left:0}
 .clip .grip.r{right:0}
 .clip .grip:hover{background:var(--accent-soft)}
+/* フェード: 減衰する区間をレーン色へのグラデーションで示す */
+.clip .fade-shade{position:absolute; top:0; bottom:0; pointer-events:none; z-index:1}
+.clip .fade-shade.l{left:0; background:linear-gradient(to right, var(--lane), transparent)}
+.clip .fade-shade.r{right:0; background:linear-gradient(to left, var(--lane), transparent)}
+.clip .fade-handle{
+  position:absolute; top:0; width:10px; height:10px; border-radius:50%;
+  background:var(--accent); cursor:ew-resize; z-index:3; opacity:.45;
+}
+.clip .fade-handle:hover{opacity:1}
 .clip .tag{
   position:absolute; left:5px; top:3px; font-size:9.5px; letter-spacing:.05em;
   color:var(--tc); font-weight:600; pointer-events:none;
