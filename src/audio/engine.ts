@@ -1,186 +1,19 @@
-import { clampFades, rampSegment, type Ramp } from "../lib/fade";
 import { computePeaks, type Peaks } from "../lib/peaks";
-import { PROJECT_VERSION, type ProjectMeta } from "../lib/store";
+import type { ProjectMeta } from "../lib/store";
 import { clamp } from "../lib/time";
 import { trimEndTo, trimStartTo } from "../lib/trim";
 import { encodeWav } from "../lib/wav";
+import { deliverBlob, deliverWav, recordToWebm, renderMix, webmSupported } from "./bounce";
+import { EQ_HIGH_HZ, EQ_LOW_HZ, EQ_MID_HZ, makeBiquad, rms, scheduleFades } from "./graph";
+import { projectMetaOf } from "./project";
+import { collectRecording, openMic, type RecSession } from "./recorder";
+import { defaultFx, HUE, type Snapshot, type Telemetry, type Track, type TrackFx } from "./types";
 
-/* 先頭3色は騒霊三姉妹。弦=ルナサ / 管=メルラン / 鍵盤=リリカ。
-   4本目以降は同系統から外して、隣り合うトラックが混ざらないようにする。 */
-export const HUE = ["#6E8FD4", "#E8735A", "#A585D6", "#E0A93B", "#63BE8C", "#D66FA0"];
-
-export const LANE_H = 88;
-export const CLIP_PAD = 6;
-
-/* EQ の固定周波数。まずは3バンドで十分（低棚 / ピーキング / 高棚）。 */
-const EQ_LOW_HZ = 200;
-const EQ_MID_HZ = 1000;
-const EQ_MID_Q = 1.0;
-const EQ_HIGH_HZ = 4000;
-
-/** トラックエフェクトのパラメータ。プレーンなデータで、ノードとは分離。 */
-export type TrackFx = {
-  /** 各バンドのゲイン（dB）。0 で素通し。 */
-  eq: { low: number; mid: number; high: number };
-  comp: { on: boolean; threshold: number; ratio: number; attack: number; release: number };
-};
-
-const defaultFx = (): TrackFx => ({
-  eq: { low: 0, mid: 0, high: 0 },
-  comp: { on: false, threshold: -24, ratio: 4, attack: 0.003, release: 0.25 },
-});
-
-export type Track = {
-  id: string;
-  name: string;
-  /** 元ファイル名（拡張子つき）と、その中身。保存（#18）でそのまま書く。 */
-  srcName: string;
-  srcBytes: Blob;
-  buf: AudioBuffer;
-  gain: GainNode;
-  pan: StereoPannerNode;
-  src: AudioBufferSourceNode | null;
-  vol: number;
-  panv: number;
-  mute: boolean;
-  solo: boolean;
-  offset: number;
-  /** バッファ内のトリム範囲（秒）。非破壊で、再生時に範囲指定するだけ。 */
-  trimStart: number;
-  trimEnd: number;
-  /** フェードの長さ（秒、クリップ実効長基準）。0 で無効。 */
-  fadeIn: number;
-  fadeOut: number;
-  /** 再生セッションごとに作るフェード用 GainNode。停止時に外す。 */
-  fade: GainNode | null;
-  fx: TrackFx;
-  /** リアルタイム側の常設エフェクトノード。パラメータはライブで触る。 */
-  fxLow: BiquadFilterNode;
-  fxMid: BiquadFilterNode;
-  fxHigh: BiquadFilterNode;
-  fxComp: DynamicsCompressorNode;
-  color: string;
-  decodeMs: number;
-  peaks: Peaks | null;
-};
-
-/** React に渡す読み取り専用の姿。AudioNode は含めない。 */
-export type TrackView = {
-  id: string;
-  name: string;
-  color: string;
-  vol: number;
-  panv: number;
-  mute: boolean;
-  solo: boolean;
-  offset: number;
-  /** トリム後の実効長（秒）。 */
-  duration: number;
-  /** バッファ内のトリム開始（秒）。端ドラッグの基準値。 */
-  trimStart: number;
-  /** フェードの長さ（秒）。 */
-  fadeIn: number;
-  fadeOut: number;
-  fx: TrackFx;
-  /** ミュート、または他がソロ中で自分はソロでない。 */
-  dimmed: boolean;
-  /** クリックで選択中。Delete キーの削除対象。 */
-  selected: boolean;
-};
-
-export type Telemetry = {
-  sampleRate: string;
-  latency: string;
-  decoded: string;
-  ram: string;
-  offline: string;
-  offlineOk: boolean;
-  webm: string;
-};
-
-export type Snapshot = {
-  tracks: TrackView[];
-  pxPerSec: number;
-  playing: boolean;
-  looping: boolean;
-  duration: number;
-  masterVol: number;
-  /** FX パネルを開いているトラック。無ければ null。 */
-  fxId: string | null;
-  telemetry: Telemetry;
-  message: string;
-  hasRender: boolean;
-  auditioning: boolean;
-  bouncing: boolean;
-  recording: boolean;
-  /** webm の実時間書き出し中。 */
-  webmBusy: boolean;
-};
-
-type Downloads = { save(o: { filename: string; data: Blob }): Promise<void> };
-
-declare global {
-  interface Window {
-    webkitAudioContext?: typeof AudioContext;
-    claude?: { use(name: "downloads"): Promise<Downloads> };
-  }
-}
+/* 型と定数は types.ts が正本。コンポーネントは従来どおりここから import できる。 */
+export { CLIP_PAD, HUE, LANE_H } from "./types";
+export type { Snapshot, Telemetry, Track, TrackFx, TrackView } from "./types";
 
 const AUDIO_EXT = /\.(mp3|wav|m4a|aac|ogg|flac)$/i;
-
-/** webm 書き出しのコンテナ。MediaRecorder の対応はブラウザ依存なので使用前に確認する。 */
-const WEBM_MIME = "audio/webm;codecs=opus";
-
-function makeBiquad(
-  ctx: BaseAudioContext,
-  type: BiquadFilterType,
-  freq: number,
-  gain: number,
-): BiquadFilterNode {
-  const b = ctx.createBiquadFilter();
-  b.type = type;
-  b.frequency.value = freq;
-  b.gain.value = gain;
-  if (type === "peaking") b.Q.value = EQ_MID_Q;
-  return b;
-}
-
-/** fx のデータからノード列を組む（bounce のオフライン側用）。素通しなら null。 */
-function buildFxChain(
-  ctx: BaseAudioContext,
-  fx: TrackFx,
-): { input: AudioNode; output: AudioNode } | null {
-  const nodes: AudioNode[] = [];
-  if (fx.eq.low !== 0 || fx.eq.mid !== 0 || fx.eq.high !== 0) {
-    nodes.push(
-      makeBiquad(ctx, "lowshelf", EQ_LOW_HZ, fx.eq.low),
-      makeBiquad(ctx, "peaking", EQ_MID_HZ, fx.eq.mid),
-      makeBiquad(ctx, "highshelf", EQ_HIGH_HZ, fx.eq.high),
-    );
-  }
-  if (fx.comp.on) {
-    const c = ctx.createDynamicsCompressor();
-    c.threshold.value = fx.comp.threshold;
-    c.ratio.value = fx.comp.ratio;
-    c.attack.value = fx.comp.attack;
-    c.release.value = fx.comp.release;
-    nodes.push(c);
-  }
-  if (!nodes.length) return null;
-  for (let i = 1; i < nodes.length; i++) nodes[i - 1].connect(nodes[i]);
-  return { input: nodes[0], output: nodes[nodes.length - 1] };
-}
-
-/** 波形の実効値。メーターの振れ幅にそのまま使う。 */
-function rms(node: AnalyserNode, buf: Uint8Array<ArrayBuffer>): number {
-  node.getByteTimeDomainData(buf);
-  let s = 0;
-  for (let i = 0; i < buf.length; i++) {
-    const v = (buf[i] - 128) / 128;
-    s += v * v;
-  }
-  return Math.sqrt(s / buf.length);
-}
 
 /**
  * オーディオ側の状態を全部持つ素のクラス。React の外に置いてあるのは意図的で、
@@ -199,14 +32,7 @@ export class Engine {
 
   private tracks: Track[] = [];
   /** 録音セッション。マイクのストリームと入力レベル用のアナライザを持つ。 */
-  private rec: {
-    stream: MediaStream;
-    recorder: MediaRecorder;
-    chunks: Blob[];
-    source: MediaStreamAudioSourceNode;
-    analyser: AnalyserNode;
-    buf: Uint8Array<ArrayBuffer>;
-  } | null = null;
+  private rec: RecSession | null = null;
   private recRaf = 0;
   private recCount = 0;
   private pxPerSec = 70;
@@ -503,31 +329,11 @@ export class Engine {
     this.say(m);
   }
 
-  /** シリアライズ可能な現在状態。ストレージの都合は呼び出し側（lib/store）に置く。 */
+  /** シリアライズ可能な現在状態。メタの構築は audio/project.ts に置く。 */
   exportProject(): { meta: ProjectMeta; blobs: Blob[] } | null {
     if (!this.tracks.length) return null;
     return {
-      meta: {
-        version: PROJECT_VERSION,
-        savedAt: Date.now(),
-        masterVol: this.masterVol,
-        pxPerSec: this.pxPerSec,
-        tracks: this.tracks.map((t) => ({
-          name: t.name,
-          srcName: t.srcName,
-          vol: t.vol,
-          panv: t.panv,
-          mute: t.mute,
-          solo: t.solo,
-          offset: t.offset,
-          trimStart: t.trimStart,
-          trimEnd: t.trimEnd,
-          fadeIn: t.fadeIn,
-          fadeOut: t.fadeOut,
-          fx: { eq: { ...t.fx.eq }, comp: { ...t.fx.comp } },
-          color: t.color,
-        })),
-      },
+      meta: projectMetaOf(this.tracks, this.masterVol, this.pxPerSec),
       blobs: this.tracks.map((t) => t.srcBytes),
     };
   }
@@ -596,45 +402,12 @@ export class Engine {
 
   private async startRecording(): Promise<void> {
     if (this.rec) return;
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      this.say("このブラウザではマイク録音（getUserMedia / MediaRecorder）が使えません。");
+    const res = await openMic(this.audio(), () => void this.finishRecording());
+    if ("error" in res) {
+      this.say(res.error);
       return;
     }
-    let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (err) {
-      const name = err instanceof DOMException ? err.name : "";
-      if (name === "NotAllowedError" || name === "SecurityError") {
-        this.say(
-          "マイクの使用が許可されませんでした。ブラウザのサイト設定でマイクを許可してから、もう一度 ● を押してください。",
-        );
-      } else if (name === "NotFoundError" || name === "OverconstrainedError") {
-        this.say("マイクが見つかりませんでした。入力デバイスの接続を確認してください。");
-      } else {
-        this.say(`マイクを開けませんでした: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      return;
-    }
-
-    const ctx = this.audio();
-    if (ctx.state === "suspended") void ctx.resume();
-    /* 入力レベルの監視用。出力へは繋がない（スピーカーへ返すとハウリングする）。 */
-    const source = ctx.createMediaStreamSource(stream);
-    const analyser = ctx.createAnalyser();
-    analyser.fftSize = 256;
-    source.connect(analyser);
-
-    const recorder = new MediaRecorder(stream);
-    const chunks: Blob[] = [];
-    recorder.addEventListener("dataavailable", (e) => {
-      if (e.data.size) chunks.push(e.data);
-    });
-    /* ボタンからの停止も、デバイス切断などによる予期しない停止もここで受ける。 */
-    recorder.addEventListener("stop", () => void this.finishRecording(), { once: true });
-
-    this.rec = { stream, recorder, chunks, source, analyser, buf: new Uint8Array(analyser.fftSize) };
-    recorder.start();
+    this.rec = res.rec;
     this.recTick();
     this.say("録音中 … もう一度 ● を押すと停止してトラックになります。");
   }
@@ -645,14 +418,7 @@ export class Engine {
     if (!rec) return;
     this.rec = null;
     cancelAnimationFrame(this.recRaf);
-    for (const trk of rec.stream.getTracks()) trk.stop();
-    try {
-      rec.source.disconnect();
-    } catch {
-      /* 既に切れている */
-    }
-
-    const blob = new Blob(rec.chunks, { type: rec.recorder.mimeType || "audio/webm" });
+    const blob = collectRecording(rec);
     if (!blob.size) {
       this.say("録音データが空でした。マイクの入力レベルを確認してください。");
       return;
@@ -878,29 +644,6 @@ export class Engine {
     this.emit();
   }
 
-  /**
-   * フェードのランプを AudioParam に張る。`clip0` はクリップ先頭のコンテキスト
-   * 時刻で、途中から再生するときは負や過去になり得る（rampSegment が現在値を
-   * 保って張り直す）。オンライン・オフラインの両コンテキストで同じに使う。
-   */
-  private scheduleFades(
-    p: AudioParam,
-    clip0: number,
-    eff: number,
-    fadeIn: number,
-    fadeOut: number,
-  ): void {
-    const { fi, fo } = clampFades(eff, fadeIn, fadeOut);
-    const segs: (Ramp | null)[] = [];
-    if (fi > 0) segs.push(rampSegment(clip0, 0, clip0 + fi, 1));
-    if (fo > 0) segs.push(rampSegment(clip0 + eff - fo, 1, clip0 + eff, 0));
-    for (const s of segs) {
-      if (!s) continue;
-      p.setValueAtTime(s.v0, s.t0);
-      p.linearRampToValueAtTime(s.v1, s.t1);
-    }
-  }
-
   /** 再生中にクリップの形が変わったら、位置を保ったままソースを組み直す。 */
   private rebuildIfPlaying(): void {
     if (!this.playing) return;
@@ -959,7 +702,7 @@ export class Engine {
       /* フェードは音量ミキサー（t.gain）とは別の GainNode に張る。 */
       if (t.fadeIn > 0 || t.fadeOut > 0) {
         const f = ctx.createGain();
-        this.scheduleFades(f.gain, at - local, eff, t.fadeIn, t.fadeOut);
+        scheduleFades(f.gain, at - local, eff, t.fadeIn, t.fadeOut);
         s.connect(f);
         f.connect(t.gain);
         t.fade = f;
@@ -1063,7 +806,7 @@ export class Engine {
         `レンダー完了: ${dur.toFixed(2)}s / ${size}MB / 実時間の約${rt}倍速。保存を試みています …`,
       );
 
-      await this.deliver(wav, rt, size);
+      await deliverWav(wav, rt, size, (m) => this.say(m));
     } catch (err) {
       this.say(`書き出しに失敗しました: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -1074,45 +817,7 @@ export class Engine {
 
   /** ミックスをオフラインで一括レンダーして lastRender に置く。WAV / webm 共用。 */
   private async renderMix(dur: number): Promise<{ rendered: AudioBuffer; ms: number }> {
-    const ctx = this.audio();
-    const t0 = performance.now();
-    const sr = ctx.sampleRate;
-    const off = new OfflineAudioContext(2, Math.ceil(dur * sr) + sr * 0.1, sr);
-    const mg = off.createGain();
-    mg.gain.value = this.masterVol;
-    mg.connect(off.destination);
-    const solo = this.tracks.some((t) => t.solo);
-    for (const t of this.tracks) {
-      if (t.mute || (solo && !t.solo)) continue;
-      const g = off.createGain();
-      const p = off.createStereoPanner();
-      const s = off.createBufferSource();
-      g.gain.value = t.vol;
-      p.pan.value = t.panv;
-      s.buffer = t.buf;
-      const eff = t.trimEnd - t.trimStart;
-      if (t.fadeIn > 0 || t.fadeOut > 0) {
-        const f = off.createGain();
-        this.scheduleFades(f.gain, t.offset, eff, t.fadeIn, t.fadeOut);
-        s.connect(f);
-        f.connect(g);
-      } else {
-        s.connect(g);
-      }
-      /* エフェクトはプレーンなデータからオフライン側のノードを組み直す。
-         素通し（EQ 全バンド 0dB・コンプ OFF）のときは挟まない。 */
-      const chain = buildFxChain(off, t.fx);
-      if (chain) {
-        g.connect(chain.input);
-        chain.output.connect(p);
-      } else {
-        g.connect(p);
-      }
-      p.connect(mg);
-      s.start(t.offset, t.trimStart, eff);
-    }
-    const rendered = await off.startRendering();
-    const ms = performance.now() - t0;
+    const { rendered, ms } = await renderMix(this.audio(), this.tracks, this.masterVol, dur);
     this.telemetry = { ...this.telemetry, offline: `${ms.toFixed(0)} ms`, offlineOk: true };
     this.lastRender = rendered;
     return { rendered, ms };
@@ -1126,7 +831,7 @@ export class Engine {
   async bounceWebm(): Promise<void> {
     const dur = this.total();
     if (!dur || this.bouncing || this.webmBusy) return;
-    if (typeof MediaRecorder === "undefined" || !MediaRecorder.isTypeSupported(WEBM_MIME)) {
+    if (!webmSupported()) {
       this.say("このブラウザは webm (Opus) の録音に対応していません。WAV の書き出しを使ってください。");
       return;
     }
@@ -1136,10 +841,12 @@ export class Engine {
     this.say("webm 書き出し: まずミックスをレンダーしています …");
     try {
       const { rendered } = await this.renderMix(dur);
-      const blob = await this.recordToWebm(ctx, rendered);
+      const blob = await recordToWebm(ctx, rendered, (el, total) =>
+        this.say(`webm 書き出し中（実時間）… ${el.toFixed(0)}s / ${total.toFixed(0)}s`),
+      );
       const size = (blob.size / 1048576).toFixed(1);
       this.telemetry = { ...this.telemetry, webm: `${rendered.duration.toFixed(1)} s（実時間）` };
-      const ok = await this.deliverBlob(blob, "prism-river-mix.webm");
+      const ok = await deliverBlob(blob, "prism-river-mix.webm");
       this.say(
         ok
           ? `webm を書き出しました: ${dur.toFixed(2)}s / ${size}MB（Opus・実時間の1.0倍。WAV の一括レンダーと違い実時間かかるのは仕様）。`
@@ -1150,125 +857,6 @@ export class Engine {
     } finally {
       this.webmBusy = false;
       this.emit();
-    }
-  }
-
-  /** レンダー済みバッファを等速再生しながら録る。進捗はログに出す。 */
-  private recordToWebm(ctx: AudioContext, buf: AudioBuffer): Promise<Blob> {
-    return new Promise((resolve, reject) => {
-      const dest = ctx.createMediaStreamDestination();
-      const s = ctx.createBufferSource();
-      s.buffer = buf;
-      s.connect(dest);
-      const rec = new MediaRecorder(dest.stream, { mimeType: WEBM_MIME });
-      const chunks: Blob[] = [];
-      const t0 = ctx.currentTime;
-      const timer = setInterval(() => {
-        const el = Math.min(buf.duration, ctx.currentTime - t0);
-        this.say(`webm 書き出し中（実時間）… ${el.toFixed(0)}s / ${buf.duration.toFixed(0)}s`);
-      }, 1000);
-      const finish = (fn: () => void) => {
-        clearInterval(timer);
-        try {
-          dest.disconnect();
-        } catch {
-          /* 既に切れている */
-        }
-        fn();
-      };
-      rec.addEventListener("dataavailable", (e) => {
-        if (e.data.size) chunks.push(e.data);
-      });
-      rec.addEventListener("error", () => finish(() => reject(new Error("MediaRecorder が失敗しました"))));
-      rec.addEventListener("stop", () => finish(() => resolve(new Blob(chunks, { type: WEBM_MIME }))));
-      s.addEventListener(
-        "ended",
-        () => {
-          if (rec.state !== "inactive") rec.stop();
-        },
-        { once: true },
-      );
-      rec.start();
-      s.start();
-    });
-  }
-
-  /** WAV 以外の汎用保存。ビューア内なら downloads capability、素なら通常ダウンロード。 */
-  private async deliverBlob(blob: Blob, filename: string): Promise<boolean> {
-    if (!window.claude) {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 30000);
-      return true;
-    }
-    let dl: Downloads | null = null;
-    try {
-      dl = await window.claude.use("downloads");
-    } catch {
-      dl = null;
-    }
-    if (!dl) return false;
-    try {
-      await dl.save({ filename, data: blob });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * claude.ai のビューア内でだけ `window.claude` が生える。自分のドメインに
-   * 置いたときは存在しないので、その場合は通常のダウンロードに落とす。
-   */
-  private async deliver(wav: Blob, rt: string, size: string): Promise<void> {
-    if (!window.claude) {
-      const url = URL.createObjectURL(wav);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "prism-river-mix.wav";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 30000);
-      this.say(`書き出しました: ${size}MB / 実時間の約${rt}倍速。`);
-      return;
-    }
-    /* capability の取得自体が reject することがある（無効化されている等）。 */
-    let dl: Downloads | null = null;
-    try {
-      dl = await window.claude.use("downloads");
-    } catch {
-      dl = null;
-    }
-    if (!dl) {
-      this.say(
-        `レンダー完了（${rt}倍速, ${size}MB）。このビューではファイル保存が使えないので、試聴のみ可能です。`,
-      );
-      return;
-    }
-    try {
-      await dl.save({ filename: "prism-river-mix.wav", data: wav });
-      this.say(`保存しました。レンダーは実時間の約${rt}倍速（${size}MB）。`);
-    } catch (err) {
-      const code = (err as { code?: string } | null)?.code;
-      if (code === "rejected_extension" || code === "extension_not_enabled") {
-        this.say(
-          `レンダーは成功（${rt}倍速, ${size}MB）。ただし .wav はこのビューアの保存許可リストに無いため書き出せません — ブラウザの制限ではなく claude.ai 側の制限なので、自分のドメインに置けば普通に保存できます。ここでは「レンダーを試聴」で結果を確認してください。`,
-        );
-      } else if (code === "too_large") {
-        this.say(
-          `レンダーは成功したが ${size}MB は保存上限(16MiB)超え。尺を削るか、自分のドメインで動かしてください。`,
-        );
-      } else if (code === "declined") {
-        this.say("保存はキャンセルされました。レンダー結果は「レンダーを試聴」で確認できます。");
-      } else {
-        this.say(`レンダーは成功（${rt}倍速）。保存は失敗しました: ${code ?? "不明なエラー"}`);
-      }
     }
   }
 
