@@ -95,7 +95,7 @@ Web Audio の標準ノードで足りる範囲。ここを先に潰す。**こ�
 計測が成果物。分かったことを README に残すまでを1件とする。
 
 - **長尺の実測** → **#21** — 5分・10分の曲を複数トラック読ませたときのメモリとデコード時間。どこで破綻するか
-- **コーデックの実対応** → **#22** — `decodeAudioData` はブラウザ依存なので Safari と Chrome で違う可能性がある。mp3 / m4a / flac / ogg を実際に読ませる。ダメな形式を読み込み時にはっきり伝えられているか
+- **コーデックの実対応** → **#22**【Chromium 分は実測済み】 — README に対応表を置いた。Chromium 列（wav / mp3 / ogg-Vorbis / webm-Opus ✔）は E2E で毎 CI 検証される。対応外ファイルを黙って落とす問題も修正済み（名前を挙げて伝える）。**残り: Safari / Firefox / m4a / flac を実機と手持ち音源で埋める**（#23 のモバイル実機検証と合わせてやるのが早い）
 - **モバイル Safari** → **#23** — iOS は AudioContext の起動にユーザー操作が要る、バックグラウンドで止まる等の制約が強い。実機でどこまで動くか
 - **レイテンシの実用性** → **#24** — 録音入力（#14）を足したとき、モニタリングの遅延が演奏に耐えるか。出力レイテンシ 10〜32ms がこの判断の入口
 
@@ -136,7 +136,7 @@ WASM の領分は **Web Audio API に機能として無いもの**:
 
 推奨側の懸念（再描画コストが計測に乗る）は、**構造で外してある**:
 
-- `src/audio/engine.ts` の `Engine` が AudioContext・トラック・トランスポートを全部持つ。React には依存しない
+- `src/audio/engine.ts` の `Engine` が AudioContext・トラック・トランスポートを全部持つ。React には依存しない（#40 で肥大化を分割: グラフ構築は `audio/graph.ts`、書き出しは `audio/bounce.ts`、録音は `audio/recorder.ts`、保存メタは `audio/project.ts`、型と定数は `audio/types.ts`。`Engine` は公開 API を保つファサードで、コンポーネントの import 元は従来どおり engine.ts）
 - React は `useSyncExternalStore` で**スナップショット**（AudioNode を含まない素のデータ）を読むだけ
 - プレイヘッド・時計・レベルメーターは `engine.onFrame()` を購読して **DOM を直に書き換える**。毎フレームの再レンダーは発生しない
 - クリップの横ドラッグ中も `style.left` を直書きし、指を離したときだけ `commitOffset()` で React と再生グラフを組み直す

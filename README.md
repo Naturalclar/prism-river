@@ -15,7 +15,7 @@ pnpm install
 pnpm dev
 ```
 
-開いたページに mp3 / wav / m4a / ogg / flac をドロップするだけ。1ファイル＝1トラック。音声つき動画（mp4 / mov / webm / mkv）をドロップすると、音声トラックだけを取り込む。
+開いたページに mp3 / wav / m4a / ogg / opus / flac / webm（音声）をドロップするだけ。1ファイル＝1トラック。音声つき動画（mp4 / mov / webm / mkv）をドロップすると、音声トラックだけを取り込む。実際に読めるかはブラウザの `decodeAudioData` 次第（下の対応表）。
 
 | 操作 | |
 | --- | --- |
@@ -76,7 +76,18 @@ MP3 書き出しの計測（2026-08-26 / ヘッドレス Chromium / 3秒ステ�
 ## 分かっている制約
 
 - **PCM はデコード後 Float32 で保持する。** `長さ(秒) × sampleRate × ch × 4 bytes` なので、10分ステレオ1本で約100MB。トラックが増えるとメモリが先に効く。
-- **`decodeAudioData` の対応形式はブラウザ依存。** 読めない形式はその場で伝える作りにしてある。
+- **`decodeAudioData` の対応形式はブラウザ依存。** 読めない形式・対応外の拡張子は、ファイル名を挙げてその場で伝える作りにしてある。実測した対応表（[#22](https://github.com/Naturalclar/prism-river/issues/22)）:
+
+  | 形式 | Chromium（ヘッドレス・2026-08-26 実測） | Safari (macOS / iOS) | Firefox |
+  | --- | --- | --- | --- |
+  | wav | ✔ | 未計測 | 未計測 |
+  | mp3 | ✔ | 未計測 | 未計測 |
+  | ogg (Vorbis) | ✔ | 未計測 | 未計測 |
+  | webm (Opus) | ✔（自前の webm 書き出しを読み戻して確認） | 未計測 | 未計測 |
+  | m4a (AAC) | 未計測 | 未計測 | 未計測 |
+  | flac | 未計測 | 未計測 | 未計測 |
+
+  Chromium 列は E2E（テスト時にその場生成した音源: WAV は自前エンコーダ、MP3/Ogg は wasm-media-encoders、webm は自アプリの書き出し）で毎 CI 検証される。m4a / flac は権利フリーの生成手段が CI に無いため、実機と手持ち音源で埋める。Safari / Firefox 列も実機待ち（モバイル実機の検証は [#23](https://github.com/Naturalclar/prism-river/issues/23)）。
 - **動画からの音声取り込みはブラウザ×コンテナ依存。** `decodeAudioData` が動画コンテナの音声をデコードできるかで決まる:
 
   | コンテナ | ヘッドレス Chromium（CI 実測） | Chrome / Safari / Firefox 実機 |
@@ -117,7 +128,12 @@ Vite + TypeScript + React + oxlint + pnpm。
 
 | ファイル | |
 | --- | --- |
-| `src/audio/engine.ts` | オーディオの全状態。React 非依存 |
+| `src/audio/engine.ts` | オーディオの全状態を持つ `Engine`（ファサード）。React 非依存 |
+| `src/audio/types.ts` | `Track` / `Snapshot` などの型と定数。engine から re-export される |
+| `src/audio/graph.ts` | ノード構築（EQ / コンプ / フェードのランプ）とメーターの RMS |
+| `src/audio/bounce.ts` | オフライン一括レンダーと WAV / webm の書き出し・保存 |
+| `src/audio/recorder.ts` | マイク録音のセッション管理 |
+| `src/audio/project.ts` | 保存（#18）用メタの構築 |
 | `src/lib/peaks.ts` | 波形のピーク計算（純粋関数） |
 | `src/lib/wav.ts` | WAV エンコード（純粋関数） |
 | `src/lib/time.ts` | 時間表示・ルーラーの刻み（純粋関数） |
