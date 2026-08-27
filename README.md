@@ -15,7 +15,7 @@ pnpm install
 pnpm dev
 ```
 
-開いたページに mp3 / wav / m4a / ogg / opus / flac / webm（音声）をドロップするだけ。1ファイル＝1トラック。実際に読めるかはブラウザの `decodeAudioData` 次第（下の対応表）。
+開いたページに mp3 / wav / m4a / ogg / opus / flac / webm（音声）をドロップするだけ。1ファイル＝1トラック。音声つき動画（mp4 / mov / webm / mkv）をドロップすると、音声トラックだけを取り込む。実際に読めるかはブラウザの `decodeAudioData` 次第（下の対応表）。
 
 | 操作 | |
 | --- | --- |
@@ -35,6 +35,7 @@ pnpm dev
 ## 今できること
 
 - 複数ファイルの同時読み込みと `decodeAudioData` によるデコード
+- 動画コンテナ（mp4 / mov / webm / mkv）からの音声取り込み。`decodeAudioData` にバイト列をそのまま渡して音声トラックだけを取り出す（依存ゼロ・対応はブラウザ依存、下記）
 - Canvas のピーク波形描画（列ごとに min/max を畳む）
 - 再生・停止・ループ、シーク、プレイヘッド追従
 - トラックごとの音量（`GainNode`）・パン（`StereoPannerNode`）・ソロ・ミュート
@@ -87,6 +88,14 @@ MP3 書き出しの計測（2026-08-26 / ヘッドレス Chromium / 3秒ステ�
   | flac | 未計測 | 未計測 | 未計測 |
 
   Chromium 列は E2E（テスト時にその場生成した音源: WAV は自前エンコーダ、MP3/Ogg は wasm-media-encoders、webm は自アプリの書き出し）で毎 CI 検証される。m4a / flac は権利フリーの生成手段が CI に無いため、実機と手持ち音源で埋める。Safari / Firefox 列も実機待ち（モバイル実機の検証は [#23](https://github.com/Naturalclar/prism-river/issues/23)）。
+- **動画からの音声取り込みはブラウザ×コンテナ依存。** `decodeAudioData` が動画コンテナの音声をデコードできるかで決まる:
+
+  | コンテナ | ヘッドレス Chromium（CI 実測） | Chrome / Safari / Firefox 実機 |
+  | --- | --- | --- |
+  | webm（VP8/VP9 + Opus） | ○（e2e で毎回検証） | 未計測（#22 と合わせて確認） |
+  | mp4 / mov（H.264 + AAC） | 計測不能※ | 未計測（#22 と合わせて確認） |
+
+  ※ Playwright の Chromium にはプロプライエタリコーデック（H.264 / AAC）が入っておらず、ここで失敗しても実機 Chrome の結果を代表しない。取り出せないときは「◯◯ から音声を取り出せませんでした（このブラウザはこの動画コンテナの音声デコードに対応していません）」と下段のログに出る。実機で読めないコンテナが多いと分かった場合の WebCodecs / デマルチプレクサ導入は #31 の段2として別 Issue に切り出す。
 - claude.ai の Artifact ビューアで開いた場合のみ、`.wav` の保存がビューア側の拡張子許可リストに阻まれる（ブラウザの制限ではない）。このリポジトリから自前でホストする分には関係しない。
 
 ## これから

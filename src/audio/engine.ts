@@ -27,6 +27,16 @@ export type { Snapshot, Telemetry, Track, TrackFx, TrackView } from "./types";
 /* 拡張子は入口の粗い篩。実際に読めるかは decodeAudioData（ブラウザ依存）が決める。
    opus / oga / webm / weba も通す — 自前の webm 書き出しを読み戻せるように（#22）。 */
 const AUDIO_EXT = /\.(mp3|wav|m4a|aac|ogg|oga|opus|flac|webm|weba)$/i;
+/* 動画コンテナも受け入れる（#31）。decodeAudioData はバイト列から音声トラック
+   だけをデコードできる場合がある（ブラウザとコンテナ依存）ので、入口では
+   弾かずに既存のデコード経路へ流し、ダメなら動画由来と分かる文言で伝える。
+   webm は音声にも動画にも使われるので、拡張子では動画扱いしない。 */
+const VIDEO_EXT = /\.(mp4|mov|m4v|mkv)$/i;
+
+/** エラー文言の分岐用。音声の取り込みか、動画からの音声取り出しか。 */
+function isVideoFile(f: File): boolean {
+  return f.type.startsWith("video/") || VIDEO_EXT.test(f.name);
+}
 
 /**
  * オーディオ側の状態を全部持つ素のクラス。React の外に置いてあるのは意図的で、
@@ -205,14 +215,16 @@ export class Engine {
 
   async ingest(files: ArrayLike<File>): Promise<void> {
     const all = Array.from(files);
-    const list = all.filter((f) => f.type.startsWith("audio/") || AUDIO_EXT.test(f.name));
+    const list = all.filter(
+      (f) => f.type.startsWith("audio/") || AUDIO_EXT.test(f.name) || isVideoFile(f),
+    );
     /* 対応外は黙って落とさず、名前を挙げて伝える（#22）。 */
     const skipped = all.filter((f) => !list.includes(f));
     if (!list.length) {
       this.say(
         skipped.length
-          ? `対応外のファイルのみでした: ${skipped.map((f) => f.name).join(" / ")}（読める拡張子: mp3 / wav / m4a / aac / ogg / opus / flac / webm）`
-          : "音声ファイルが見つかりませんでした。",
+          ? `対応外のファイルのみでした: ${skipped.map((f) => f.name).join(" / ")}（読める拡張子: mp3 / wav / m4a / aac / ogg / opus / flac / webm と動画 mp4 / mov / mkv）`
+          : "音声（または音声つき動画）ファイルが見つかりませんでした。",
       );
       return;
     }
@@ -241,11 +253,16 @@ export class Engine {
       const ms = performance.now() - t0;
       this.decodeTotal += ms;
       this.push(f.name.replace(/\.[^.]+$/, ""), f.name, f, buf, ms);
+      const via = isVideoFile(f) ? "動画から音声のみ取り込み / " : "";
       this.say(
-        `${f.name} — ${buf.duration.toFixed(2)}s / ${buf.numberOfChannels}ch / ${buf.sampleRate}Hz / デコード ${ms.toFixed(0)}ms`,
+        `${f.name} — ${via}${buf.duration.toFixed(2)}s / ${buf.numberOfChannels}ch / ${buf.sampleRate}Hz / デコード ${ms.toFixed(0)}ms`,
       );
     } catch {
-      this.say(`${f.name} をデコードできませんでした（この形式はブラウザが対応していません）`);
+      this.say(
+        isVideoFile(f)
+          ? `${f.name} から音声を取り出せませんでした（このブラウザはこの動画コンテナの音声デコードに対応していません）`
+          : `${f.name} をデコードできませんでした（この形式はブラウザが対応していません）`,
+      );
     }
   }
 
