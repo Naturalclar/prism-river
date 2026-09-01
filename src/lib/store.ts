@@ -55,6 +55,8 @@ export type TrackMeta = {
   color: string;
   /** 割り当てバス。無印（バス導入前の保存）と null は Master 直結。 */
   bus?: BusId | null;
+  /** MIDI 由来トラックの元チャンネル（#46）。復元時に同じチャンネルだけ鳴らし直す。 */
+  midiChannel?: number;
 };
 
 export type ProjectMeta = {
@@ -112,7 +114,9 @@ function isTrackMetaBase(v: unknown): v is Omit<TrackMeta, "fx"> & { fx?: unknow
     num(t.fadeIn) &&
     num(t.fadeOut) &&
     /* バス導入前の保存には無いフィールドなので、欠けていてもよい。 */
-    (t.bus === undefined || t.bus === null || BUS_IDS.includes(t.bus as BusId))
+    (t.bus === undefined || t.bus === null || BUS_IDS.includes(t.bus as BusId)) &&
+    /* MIDI 導入前の保存にも無い。 */
+    (t.midiChannel === undefined || num(t.midiChannel))
   );
 }
 

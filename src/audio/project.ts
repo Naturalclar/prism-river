@@ -32,6 +32,7 @@ export function projectMetaOf(
       fx: { eq: { ...t.fx.eq }, comp: { ...t.fx.comp } },
       color: t.color,
       bus: t.bus,
+      ...(t.midiChannel === null ? {} : { midiChannel: t.midiChannel }),
     })),
   };
 }
