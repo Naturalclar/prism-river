@@ -169,6 +169,7 @@ export class Engine {
       hasRender: this.lastRender !== null,
       auditioning: this.auditionSrc !== null,
       bouncing: this.bouncing,
+      exporting: this.exporting,
       recording: this.rec !== null,
       webmBusy: this.webmBusy,
       mp3Busy: this.mp3Busy,
@@ -1030,9 +1031,18 @@ export class Engine {
 
   /* ── 書き出し ──────────────────────────────────────────────────────── */
 
+  /**
+   * 書き出しは同時に1つだけ（#51）。webm は実時間かかるので、その最中に
+   * WAV / MP3 を押せると同じミックスのレンダーが2本並走し、長尺ではピーク
+   * メモリが倍になるうえ、ログ行が1つしかないので後着が先の結果を消す。
+   */
+  private get exporting(): boolean {
+    return this.bouncing || this.webmBusy || this.mp3Busy;
+  }
+
   async bounce(): Promise<void> {
     const dur = this.total();
-    if (!dur || this.bouncing) return;
+    if (!dur || this.exporting) return;
     this.audio();
     this.bouncing = true;
     this.say("オフラインでミックスを描画中 …");
@@ -1072,7 +1082,7 @@ export class Engine {
    */
   async bounceWebm(): Promise<void> {
     const dur = this.total();
-    if (!dur || this.bouncing || this.webmBusy) return;
+    if (!dur || this.exporting) return;
     if (!webmSupported()) {
       this.say("このブラウザは webm (Opus) の録音に対応していません。WAV の書き出しを使ってください。");
       return;
@@ -1110,7 +1120,7 @@ export class Engine {
    */
   async bounceMp3(): Promise<void> {
     const dur = this.total();
-    if (!dur || this.bouncing || this.mp3Busy) return;
+    if (!dur || this.exporting) return;
     this.audio();
     this.mp3Busy = true;
     this.say("MP3 書き出し: まずミックスをレンダーしています …");

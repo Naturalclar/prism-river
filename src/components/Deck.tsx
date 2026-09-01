@@ -141,14 +141,14 @@ export function Deck({ snap, savedAt, storeBusy, onSave, onRestore, onDiscard }:
         </button>
         <button
           className="ghost"
-          disabled={idle || snap.bouncing}
+          disabled={idle || snap.exporting}
           onClick={() => void engine.bounce()}
         >
           ミックスを書き出す
         </button>
         <button
           className="ghost"
-          disabled={idle || snap.bouncing || snap.webmBusy}
+          disabled={idle || snap.exporting}
           title="実時間で再生しながら録るので、ミックスの長さぶん時間がかかる"
           onClick={() => void engine.bounceWebm()}
         >
@@ -156,7 +156,7 @@ export function Deck({ snap, savedAt, storeBusy, onSave, onRestore, onDiscard }:
         </button>
         <button
           className="ghost"
-          disabled={idle || snap.bouncing || snap.mp3Busy}
+          disabled={idle || snap.exporting}
           title="WASM（LAME）でオフラインエンコードする。実時間はかからない"
           onClick={() => void engine.bounceMp3()}
         >

@@ -89,6 +89,34 @@ test("webm 書き出しで Opus のファイルが降りてくる", async ({ pag
   await expect(page.getByTestId("probe-webm")).toContainText("実時間");
 });
 
+/* #51: 書き出しは同時に1つだけ。webm は実時間かかるので、その最中に WAV / MP3
+   を押せると同じミックスのレンダーが2本並走し、長尺ではピークメモリが倍になる。
+   ログ行は1つしかないので、後から出た結果が先の結果を消しもする。 */
+test("書き出し中は他の書き出しを始められない", async ({ page }) => {
+  await load(page, [makeTone("excl.wav", 440, 3)]);
+  const wav = page.getByRole("button", { name: "ミックスを書き出す", exact: true });
+  const webm = page.getByRole("button", { name: /webm/ });
+  const mp3 = page.getByRole("button", { name: /MP3/ });
+
+  const download = page.waitForEvent("download");
+  await webm.click();
+
+  /* webm は実時間（3秒）なので、その間ずっと他の2つも押せない。 */
+  await expect(webm).toBeDisabled();
+  await expect(wav).toBeDisabled();
+  await expect(mp3).toBeDisabled();
+
+  await expect(page.getByTestId("log")).toContainText("webm を書き出しました", {
+    timeout: 20_000,
+  });
+  await download;
+
+  /* 終わったら3つとも戻る（#4 と同じ「無効のまま死なない」の確認）。 */
+  await expect(wav).toBeEnabled();
+  await expect(webm).toBeEnabled();
+  await expect(mp3).toBeEnabled();
+});
+
 /* #20: MP3（LAME / WASM）のオフライン書き出し。webm と違い実時間はかからない。 */
 test("MP3 で書き出すと WASM エンコードの計測値が出る", async ({ page }) => {
   await load(page, [makeTone("mp1.wav", 440, 3), makeTone("mp2.wav", 550, 3)]);

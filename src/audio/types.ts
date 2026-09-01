@@ -119,6 +119,8 @@ export type Snapshot = {
   hasRender: boolean;
   auditioning: boolean;
   bouncing: boolean;
+  /** WAV / webm / MP3 のどれかが走っている。書き出しは同時に1つだけ（#51）。 */
+  exporting: boolean;
   recording: boolean;
   /** webm の実時間書き出し中。 */
   webmBusy: boolean;
