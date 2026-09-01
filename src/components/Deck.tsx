@@ -141,6 +141,13 @@ export function Deck({ snap, savedAt, storeBusy, onSave, onRestore, onDiscard }:
         </button>
         <button
           className="ghost"
+          title="アプリ内でドラムパターンを作ってトラックにする"
+          onClick={() => void engine.addDrums()}
+        >
+          ドラムを追加
+        </button>
+        <button
+          className="ghost"
           disabled={idle || snap.exporting}
           onClick={() => void engine.bounce()}
         >

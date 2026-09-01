@@ -1,4 +1,13 @@
 import { encodeMp3InWorker } from "./mp3";
+import {
+  decodeDrumPattern,
+  emptyPattern,
+  encodeDrumPattern,
+  presetHits,
+  type DrumPattern,
+  type DrumVoice,
+  type PresetId,
+} from "../lib/drums";
 import { DRUM_CHANNEL, MidiParseError, parseSmf, type MidiSong } from "../lib/midi";
 import { MP3_KBPS } from "../lib/mp3";
 import { computePeaks, type Peaks } from "../lib/peaks";
@@ -8,6 +17,7 @@ import { trimEndTo, trimStartTo } from "../lib/trim";
 import { encodeWav } from "../lib/wav";
 import { deliverBlob, deliverWav, recordToWebm, renderMix, webmSupported } from "./bounce";
 import { EQ_HIGH_HZ, EQ_LOW_HZ, EQ_MID_HZ, makeBiquad, rms, scheduleFades } from "./graph";
+import { renderDrums } from "./drums";
 import { renderMidi } from "./midi";
 import { projectMetaOf } from "./project";
 import { collectRecording, openMic, type RecSession } from "./recorder";
@@ -39,6 +49,14 @@ const VIDEO_EXT = /\.(mp4|mov|m4v|mkv)$/i;
    拡張子から audio/midi が付いて入口を通ってしまうため、ここで先に振り分けて
    SMF 解析＋内蔵シンセのレンダー経路へ送る。 */
 const MIDI_EXT = /\.(mid|midi|smf)$/i;
+
+/* アプリ内で作ったドラムトラックの目印（#54）。元ファイルが無いので、
+   srcBytes にはパターンの JSON を入れてある。復元はここで振り分ける。 */
+const DRUMS_EXT = /\.drums\.json$/i;
+
+function isDrumsFile(f: { name: string }): boolean {
+  return DRUMS_EXT.test(f.name);
+}
 
 /** エラー文言の分岐用。音声の取り込みか、動画からの音声取り出しか。 */
 function isVideoFile(f: File): boolean {
@@ -89,6 +107,10 @@ export class Engine {
   private lastRender: AudioBuffer | null = null;
   private selectedId: string | null = null;
   private fxId: string | null = null;
+  private drumsId: string | null = null;
+  private drumCount = 0;
+  /** ドラムの再レンダーは非同期なので、古い結果で上書きしないための世代。 */
+  private drumGen = 0;
   private auditionSrc: AudioBufferSourceNode | null = null;
   private bouncing = false;
   private webmBusy = false;
@@ -156,6 +178,7 @@ export class Engine {
         fx: { eq: { ...t.fx.eq }, comp: { ...t.fx.comp } },
         dimmed: t.mute || (solo && !t.solo),
         selected: t.id === this.selectedId,
+        drums: t.drums ? { ...t.drums, hits: { ...t.drums.hits } } : null,
       })),
       pxPerSec: this.pxPerSec,
       playing: this.playing,
@@ -164,6 +187,7 @@ export class Engine {
       masterVol: this.masterVol,
       busVol: { ...this.busVol },
       fxId: this.fxId,
+      drumsId: this.drumsId,
       telemetry: this.telemetry,
       message: this.message,
       hasRender: this.lastRender !== null,
@@ -419,6 +443,7 @@ export class Engine {
       srcName,
       srcBytes,
       midiChannel: null,
+      drums: null,
       buf,
       gain,
       pan,
@@ -468,6 +493,7 @@ export class Engine {
     if (!t) return;
     if (this.selectedId === id) this.selectedId = null;
     if (this.fxId === id) this.fxId = null;
+    if (this.drumsId === id) this.drumsId = null;
     this.stopSrc(t);
     try {
       t.gain.disconnect();
@@ -552,15 +578,23 @@ export class Engine {
       const t0 = performance.now();
       /* MIDI 由来のトラックは元バイト列が .mid なので decodeAudioData では
          復元できない。取り込みと同じ解析＋レンダーを通す（#46）。 */
-      const decoding = isMidiFile({ name: m.srcName })
-        ? this.renderMidiChannel(ctx, bytes, m.midiChannel)
-        : ctx.decodeAudioData(bytes);
+      /* 生成トラック（MIDI / ドラム）は元バイト列が音声ではないので、
+         decodeAudioData ではなくそれぞれのレンダー経路を通す。 */
+      const drums = isDrumsFile({ name: m.srcName })
+        ? decodeDrumPattern(new TextDecoder().decode(bytes))
+        : null;
+      const decoding = drums
+        ? renderDrums(drums, ctx.sampleRate).then((r) => r.buf)
+        : isMidiFile({ name: m.srcName })
+          ? this.renderMidiChannel(ctx, bytes, m.midiChannel)
+          : ctx.decodeAudioData(bytes);
       // oxlint-disable-next-line no-await-in-loop
       const buf = await decoding;
       const ms = performance.now() - t0;
       this.decodeTotal += ms;
       const t = this.push(m.name, m.srcName, blobs[i], buf, ms);
       t.midiChannel = m.midiChannel ?? null;
+      t.drums = drums;
       t.vol = clamp(m.vol, 0, 1.4);
       t.panv = clamp(m.panv, -1, 1);
       t.pan.pan.value = t.panv;
@@ -589,6 +623,94 @@ export class Engine {
     this.balance();
     this.refreshTelemetry();
     this.touched();
+  }
+
+  /* ── ドラム（#54） ─────────────────────────────────────────────────── */
+
+  /**
+   * パターンから AudioBuffer を作ってトラックに載せ替える。追加も編集も
+   * ここを通る。元ファイルが無い生成トラックなので、`srcBytes` にはパターンの
+   * JSON を入れておく——保存（#18）はトラック1本につき Blob 1つを前提に
+   * していて、これが音の正本になる。
+   */
+  private async renderDrumsInto(t: Track, pattern: DrumPattern): Promise<void> {
+    const ctx = this.audio();
+    if (ctx.state === "suspended") await ctx.resume();
+    /* 連打されると古いレンダーが後から返ることがあるので、最後の1回だけ採る。 */
+    const gen = ++this.drumGen;
+    const { buf, ms, hits } = await renderDrums(pattern, ctx.sampleRate);
+    if (gen !== this.drumGen || !this.tracks.includes(t)) return;
+
+    t.drums = pattern;
+    t.buf = buf;
+    t.srcBytes = new Blob([encodeDrumPattern(pattern)], { type: "application/json" });
+    /* 尺が変わるので、トリムとフェードは掛け直しになる（黙って範囲外の値を
+       残すと再生とクリップ表示が食い違う）。 */
+    t.trimStart = 0;
+    t.trimEnd = buf.duration;
+    t.fadeIn = 0;
+    t.fadeOut = 0;
+    t.peaks = null;
+    this.say(
+      `${t.name} — ${pattern.bpm}BPM / ${pattern.bars}小節 / ${hits}発 / ${buf.duration.toFixed(2)}s（レンダー ${ms.toFixed(0)}ms）`,
+    );
+    this.rebuildIfPlaying();
+    this.touched();
+  }
+
+  /** ドラムトラックを1本足して格子を開く。プリセットから始める（#54）。 */
+  async addDrums(): Promise<void> {
+    const ctx = this.audio();
+    if (ctx.state === "suspended") await ctx.resume();
+    const pattern: DrumPattern = { ...emptyPattern(120, 2), hits: presetHits("four") };
+    const { buf, ms } = await renderDrums(pattern, ctx.sampleRate);
+    const name = `ドラム ${++this.drumCount}`;
+    const t = this.push(
+      name,
+      `${name}.drums.json`,
+      new Blob([encodeDrumPattern(pattern)], { type: "application/json" }),
+      buf,
+      ms,
+    );
+    t.drums = pattern;
+    this.drumsId = t.id;
+    this.refreshTelemetry();
+    this.rebuildIfPlaying();
+    this.say(`${name} を追加しました（${pattern.bpm}BPM / ${pattern.bars}小節）。`);
+    this.touched();
+  }
+
+  toggleDrumPanel(id: string): void {
+    this.drumsId = this.drumsId === id ? null : id;
+    this.emit();
+  }
+
+  /** 格子のマス目。押した瞬間に鳴りが変わるよう、その場で作り直す。 */
+  toggleDrumStep(id: string, voice: DrumVoice, step: number): void {
+    const t = this.find(id);
+    if (!t?.drums) return;
+    const hits = { ...t.drums.hits, [voice]: [...t.drums.hits[voice]] };
+    hits[voice][step] = !hits[voice][step];
+    void this.renderDrumsInto(t, { ...t.drums, hits });
+  }
+
+  setDrumBpm(id: string, bpm: number): void {
+    const t = this.find(id);
+    if (!t?.drums) return;
+    void this.renderDrumsInto(t, { ...t.drums, bpm });
+  }
+
+  setDrumBars(id: string, bars: number): void {
+    const t = this.find(id);
+    if (!t?.drums) return;
+    void this.renderDrumsInto(t, { ...t.drums, bars });
+  }
+
+  /** プリセットで格子を置き換える。BPM と小節数は今の値を引き継ぐ。 */
+  applyDrumPreset(id: string, preset: PresetId): void {
+    const t = this.find(id);
+    if (!t?.drums) return;
+    void this.renderDrumsInto(t, { ...t.drums, hits: presetHits(preset) });
   }
 
   /* ── 録音 ──────────────────────────────────────────────────────────── */

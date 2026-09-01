@@ -1,4 +1,5 @@
 import type { Peaks } from "../lib/peaks";
+import type { DrumPattern } from "../lib/drums";
 import type { BusId, BusVols } from "../lib/store";
 
 /* 先頭3色は騒霊三姉妹。弦=ルナサ / 管=メルラン / 鍵盤=リリカ。
@@ -35,6 +36,8 @@ export type Track = {
   srcBytes: Blob;
   /** MIDI 由来なら元のチャンネル、そうでなければ null（#46）。 */
   midiChannel: number | null;
+  /** アプリ内で作ったドラムパターン（#54）。生成トラックはこれが音の正本。 */
+  drums: DrumPattern | null;
   buf: AudioBuffer;
   gain: GainNode;
   pan: StereoPannerNode;
@@ -88,6 +91,8 @@ export type TrackView = {
   dimmed: boolean;
   /** クリックで選択中。Delete キーの削除対象。 */
   selected: boolean;
+  /** ドラムトラックならそのパターン。格子 UI の表示元（#54）。 */
+  drums: DrumPattern | null;
 };
 
 export type Telemetry = {
@@ -114,6 +119,8 @@ export type Snapshot = {
   busVol: BusVols;
   /** FX パネルを開いているトラック。無ければ null。 */
   fxId: string | null;
+  /** ドラム格子を開いているトラック。無ければ null（#54）。 */
+  drumsId: string | null;
   telemetry: Telemetry;
   message: string;
   hasRender: boolean;
