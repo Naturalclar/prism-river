@@ -47,6 +47,29 @@ export function wavWindowPeak(path: string, fromSec: number, toSec: number): num
   return peak;
 }
 
+/**
+ * L/R レベルメーターの振れ幅（style.width の %）を ms 間サンプリングして最大値を返す。
+ * 「実際に音が出ているか」を DOM 越しに見る唯一の手段（AnalyserNode の RMS が
+ * そのまま幅になる）。無音なら 0 のまま。
+ */
+export async function peakMeter(page: Page, ms: number): Promise<number> {
+  const until = Date.now() + ms;
+  let peak = 0;
+  while (Date.now() < until) {
+    /* 時間軸のサンプリングなので、並列化するとサンプルにならない。 */
+    // oxlint-disable-next-line no-await-in-loop
+    const widths = await page.evaluate(() =>
+      [...document.querySelectorAll(".meter i")].map(
+        (e) => Number.parseFloat((e as HTMLElement).style.width) || 0,
+      ),
+    );
+    peak = Math.max(peak, ...widths);
+    // oxlint-disable-next-line no-await-in-loop
+    await page.waitForTimeout(50);
+  }
+  return peak;
+}
+
 /* タイル canvas の中央行を読んで、描画済みかどうかを見る。未描画（width=0）は 0。 */
 export async function tilePixelSum(page: Page, index: number): Promise<number> {
   return page

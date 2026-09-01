@@ -271,6 +271,7 @@ export class Engine {
     const ctx = this.audio();
     if (ctx.state === "suspended") await ctx.resume();
 
+    const before = this.tracks.length;
     for (const f of list) {
       this.say(`読み込み中: ${f.name} …`);
       /* 1本ずつ順に読む。並列にすると読み込み中のログが混ざるうえ、
@@ -281,6 +282,10 @@ export class Engine {
     if (skipped.length) {
       this.say(`${skipped.length}件を対応外としてスキップ: ${skipped.map((f) => f.name).join(" / ")}`);
     }
+    /* 再生中に足したトラックも、その場から鳴らす（#50）。移動やトリムと同じ
+       扱いで、全部読み終えてから1回だけ組み直す（1本ごとに組み直すと、
+       既に鳴っているトラックがファイルの数だけ途切れる）。 */
+    if (this.tracks.length > before) this.rebuildIfPlaying();
     this.refreshTelemetry();
     this.emit();
   }
@@ -634,6 +639,9 @@ export class Engine {
       /* 保存（#18）用に、エンコード済みの録音チャンクを元ファイルとして持たせる。 */
       const ext = blob.type.includes("ogg") ? "ogg" : blob.type.includes("mp4") ? "m4a" : "webm";
       this.push(name, `${name}.${ext}`, blob, buf, ms);
+      /* 再生に重ねて録った場合、止めた時点から録音トラックも鳴る（#50）。
+         これが無いと、オーバーダブは一度停止しないと聴き返せない。 */
+      this.rebuildIfPlaying();
       this.refreshTelemetry();
       this.say(
         `${name} — ${buf.duration.toFixed(2)}s / ${buf.numberOfChannels}ch / ${buf.sampleRate}Hz / デコード ${ms.toFixed(0)}ms`,
