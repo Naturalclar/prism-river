@@ -1,5 +1,5 @@
 import { readFileSync, statSync } from "node:fs";
-import { expect, load, makeTone, test } from "./helpers";
+import { expect, load, makeTone, setRange, test } from "./helpers";
 
 /** ミックスの書き出し（WAV / webm）と保存経路の失敗からの復帰。 */
 
@@ -35,6 +35,35 @@ test("保存に失敗しても書き出しボタンは無効のままになら�
   await expect(page.getByTestId("log")).toContainText("ファイル保存が使えない");
   /* afterEach の「ページ例外ゼロ」も本テストの検証対象:
      修正前は use() の reject が unhandled rejection になっていた。 */
+});
+
+/* #49: 書き出したあとに編集すると、レンダー結果はもう今のミックスではない。
+   「レンダーを試聴」が古い音を黙って鳴らしていた回帰。音に効かない変更
+   （ズーム）では捨てないことも、同じテストで固定しておく。 */
+test("編集するとレンダー結果は捨てられ、表示だけの変更では残る", async ({ page }) => {
+  await load(page, [makeTone("stale1.wav", 440), makeTone("stale2.wav", 330)]);
+  const audition = page.getByRole("button", { name: /レンダーを試聴/ });
+
+  const first = page.waitForEvent("download");
+  await page.getByRole("button", { name: "ミックスを書き出す", exact: true }).click();
+  await expect(audition).toBeVisible({ timeout: 15_000 });
+  await first;
+
+  /* ズームは波形の見え方だけなので、レンダー結果はそのまま使える。 */
+  await setRange(page, "#zoom", 200);
+  await expect(audition).toBeVisible();
+
+  /* トラックを消すと、その音を含んだレンダーは今のミックスと違う。 */
+  await page.getByRole("button", { name: /を削除/ }).first().click();
+  await expect(audition).toHaveCount(0);
+
+  /* 音量のような「消さない編集」でも同じこと。 */
+  const second = page.waitForEvent("download");
+  await page.getByRole("button", { name: "ミックスを書き出す", exact: true }).click();
+  await expect(audition).toBeVisible({ timeout: 15_000 });
+  await second;
+  await setRange(page, "#mVol", 0.4);
+  await expect(audition).toHaveCount(0);
 });
 
 /* webm はオフラインの一括レンダーと違い、実時間で再生しながら録る（仕様）。
