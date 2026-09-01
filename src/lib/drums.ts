@@ -37,8 +37,11 @@ export type DrumPattern = {
   hits: Record<DrumVoice, boolean[]>;
 };
 
-/** 展開後の1発。レンダー側はこれを順に鳴らすだけでよい。 */
-export type DrumHit = { voice: DrumVoice; atSec: number };
+/**
+ * 展開後の1発。レンダー側はこれを順に鳴らすだけでよい。
+ * `velocity` は 0..1 の強さ（格子は 1 固定、MIDI はノートの強弱が入る・#58）。
+ */
+export type DrumHit = { voice: DrumVoice; atSec: number; velocity: number };
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
@@ -120,11 +123,31 @@ export function expandPattern(p: DrumPattern): DrumHit[] {
   for (let bar = 0; bar < bars; bar++) {
     for (let i = 0; i < STEPS; i++) {
       for (const voice of DRUM_VOICES) {
-        if (p.hits[voice][i]) hits.push({ voice, atSec: (bar * STEPS + i) * step });
+        if (p.hits[voice][i]) hits.push({ voice, atSec: (bar * STEPS + i) * step, velocity: 1 });
       }
     }
   }
   return hits;
+}
+
+/* ── GM パーカッション（#58） ─────────────────────────────────────────── */
+
+/**
+ * MIDI チャンネル10 のノート番号を音色に対応づける（GM のドラムマップ）。
+ * 音色は4つしか無いので**全部は鳴らせない**。対応が無いものは null を返し、
+ * 呼び出し側が本数を数えて伝える（黙って落とさない）。
+ */
+export function voiceForGmNote(note: number): DrumVoice | null {
+  /* 35 アコースティックバスドラム / 36 バスドラム1 */
+  if (note === 35 || note === 36) return "kick";
+  /* 37 サイドスティック / 38 アコースティックスネア / 39 ハンドクラップ / 40 エレクトリックスネア */
+  if (note >= 37 && note <= 40) return "snare";
+  /* 42 クローズドハイハット / 44 ペダルハイハット */
+  if (note === 42 || note === 44) return "hatClosed";
+  /* 46 オープンハイハット。49/51/57/59 のシンバル類も、余韻の長いノイズが
+     一番近いので同じ音色を当てる（タム類は近いものが無いので鳴らさない）。 */
+  if (note === 46 || note === 49 || note === 51 || note === 57 || note === 59) return "hatOpen";
+  return null;
 }
 
 /* ── 保存・復元（#18）用の符号化 ─────────────────────────────────────── */

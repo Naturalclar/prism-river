@@ -41,16 +41,63 @@ test("複数チャンネルの MIDI はチャンネルごとにトラックが�
     [
       { atBeat: 0, beats: 2, midi: 60, channel: 0 },
       { atBeat: 0, beats: 2, midi: 67, channel: 1 },
-      /* チャンネル10（0 始まりで 9）はドラム。段1では鳴らさず、その旨を伝える。 */
+      /* チャンネル10（0 始まりで 9）はドラム。#58 で他と同じく1トラックになる。 */
       { atBeat: 0, beats: 1, midi: 36, channel: 9 },
     ],
     1,
   );
   await page.setInputFiles("[data-testid=picker]", file);
-  await expect(page.getByTestId("track-head")).toHaveCount(2);
+  await expect(page.getByTestId("track-head")).toHaveCount(3);
   await expect(page.getByTestId("track-head").first()).toContainText("ch1");
   await expect(page.getByTestId("track-head").nth(1)).toContainText("ch2");
-  await expect(page.getByTestId("log")).toContainText("ドラム 1音");
+  await expect(page.getByTestId("track-head").nth(2)).toContainText("ドラム");
+});
+
+/* #58: チャンネル10 を #54 のドラム音源で鳴らす。以前はドラムだけの MIDI は
+   1本もトラックにならなかった。 */
+test("ドラムだけの MIDI もトラックになり、実際に鳴る", async ({ page }) => {
+  /* 120BPM で 1拍 = 0.5s。0.0s にキック（36）、1.0s にスネア（38）。 */
+  const file = makeMidi(
+    "beat.mid",
+    [
+      { atBeat: 0, beats: 1, midi: 36, channel: 9 },
+      { atBeat: 2, beats: 1, midi: 38, channel: 9 },
+    ],
+    1,
+  );
+  await page.setInputFiles("[data-testid=picker]", file);
+  await expect(page.getByTestId("track-head")).toHaveCount(1);
+
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "ミックスを書き出す", exact: true }).click();
+  await expect(page.getByTestId("log")).toContainText("書き出しました", { timeout: 20_000 });
+  const path = await (await download).path();
+  if (!path) throw new Error("download path unavailable");
+
+  /* 置いた2発の位置で鳴り、間は静か（ドラムの減衰は 0.3s 以内）。 */
+  const kick = wavWindowPeak(path, 0, 0.1);
+  const gap = wavWindowPeak(path, 0.6, 0.95);
+  const snare = wavWindowPeak(path, 1.0, 1.1);
+  expect(kick).toBeGreaterThan(3000);
+  expect(snare).toBeGreaterThan(3000);
+  expect(gap).toBeLessThan(kick / 10);
+});
+
+/* 音色の対応が無いノート（タム類）は鳴らないが、黙って落とさず本数を伝える。 */
+test("対応する音色が無いドラムは本数を伝える", async ({ page }) => {
+  const file = makeMidi(
+    "toms.mid",
+    [
+      { atBeat: 0, beats: 1, midi: 36, channel: 9 },
+      /* 45 / 47 はタム。4音色のどれにも当たらない。 */
+      { atBeat: 1, beats: 1, midi: 45, channel: 9 },
+      { atBeat: 2, beats: 1, midi: 47, channel: 9 },
+    ],
+    1,
+  );
+  await page.setInputFiles("[data-testid=picker]", file);
+  await expect(page.getByTestId("track-head")).toHaveCount(1);
+  await expect(page.getByTestId("log")).toContainText("2音は対応する音色が無い");
 });
 
 test("保存 → リロード → 復元で MIDI 由来トラックが戻る", async ({ page }) => {

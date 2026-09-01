@@ -1,4 +1,10 @@
-import { expandPattern, patternDuration, type DrumPattern, type DrumVoice } from "../lib/drums";
+import {
+  expandPattern,
+  patternDuration,
+  type DrumHit,
+  type DrumPattern,
+  type DrumVoice,
+} from "../lib/drums";
 
 /**
  * ドラムパターンを内蔵音源でオフラインレンダーする（#54）。
@@ -44,21 +50,27 @@ function decay(gain: AudioParam, at: number, level: number, seconds: number): vo
   gain.linearRampToValueAtTime(0, at + seconds);
 }
 
-function kick(ctx: OfflineAudioContext, dest: AudioNode, at: number): void {
+function kick(ctx: OfflineAudioContext, dest: AudioNode, at: number, vel: number): void {
   const osc = ctx.createOscillator();
   const g = ctx.createGain();
   osc.type = "sine";
   /* 150Hz から 50Hz へ急降下させるのがバスドラらしさの正体。 */
   osc.frequency.setValueAtTime(150, at);
   osc.frequency.exponentialRampToValueAtTime(50, at + 0.08);
-  decay(g.gain, at, LEVEL.kick, TAIL.kick);
+  decay(g.gain, at, LEVEL.kick * vel, TAIL.kick);
   osc.connect(g);
   g.connect(dest);
   osc.start(at);
   osc.stop(at + TAIL.kick + 0.01);
 }
 
-function snare(ctx: OfflineAudioContext, dest: AudioNode, noise: AudioBuffer, at: number): void {
+function snare(
+  ctx: OfflineAudioContext,
+  dest: AudioNode,
+  noise: AudioBuffer,
+  at: number,
+  vel: number,
+): void {
   /* ノイズ（スナッピー）＋ 胴の鳴りの三角波を重ねる。 */
   const src = ctx.createBufferSource();
   const bp = ctx.createBiquadFilter();
@@ -67,7 +79,7 @@ function snare(ctx: OfflineAudioContext, dest: AudioNode, noise: AudioBuffer, at
   bp.type = "bandpass";
   bp.frequency.value = 1800;
   bp.Q.value = 0.8;
-  decay(ng.gain, at, LEVEL.snare, TAIL.snare);
+  decay(ng.gain, at, LEVEL.snare * vel, TAIL.snare);
   src.connect(bp);
   bp.connect(ng);
   ng.connect(dest);
@@ -78,7 +90,7 @@ function snare(ctx: OfflineAudioContext, dest: AudioNode, noise: AudioBuffer, at
   const og = ctx.createGain();
   osc.type = "triangle";
   osc.frequency.value = 180;
-  decay(og.gain, at, LEVEL.snare * 0.5, TAIL.snare * 0.6);
+  decay(og.gain, at, LEVEL.snare * 0.5 * vel, TAIL.snare * 0.6);
   osc.connect(og);
   og.connect(dest);
   osc.start(at);
@@ -91,6 +103,7 @@ function hat(
   noise: AudioBuffer,
   at: number,
   open: boolean,
+  vel: number,
 ): void {
   const src = ctx.createBufferSource();
   const hp = ctx.createBiquadFilter();
@@ -99,7 +112,7 @@ function hat(
   hp.type = "highpass";
   hp.frequency.value = 7000;
   const voice: DrumVoice = open ? "hatOpen" : "hatClosed";
-  decay(g.gain, at, LEVEL[voice], TAIL[voice]);
+  decay(g.gain, at, LEVEL[voice] * vel, TAIL[voice]);
   src.connect(hp);
   hp.connect(g);
   g.connect(dest);
@@ -114,11 +127,22 @@ export async function renderDrums(
   pattern: DrumPattern,
   sampleRate: number,
 ): Promise<DrumRenderResult> {
+  /* 全長をパターンちょうどにしておくと、2本並べたときに拍が合う。 */
+  return renderDrumHits(expandPattern(pattern), patternDuration(pattern), sampleRate);
+}
+
+/**
+ * 発音イベント列をそのまま鳴らす。格子（#54）と MIDI チャンネル10（#58）の
+ * 共用口で、どちらも同じ音源を通る。
+ */
+export async function renderDrumHits(
+  hits: DrumHit[],
+  durSec: number,
+  sampleRate: number,
+): Promise<DrumRenderResult> {
   const t0 = performance.now();
-  const hits = expandPattern(pattern);
-  /* 最後の発音の減衰がループの尻で切れないよう、余白を足してから全長で切る。
-     全長をパターンちょうどにしておくと、2本並べたときに拍が合う。 */
-  const dur = patternDuration(pattern);
+  /* 最後の発音の減衰が尻で切れないよう、余白を足してから全長で切る。 */
+  const dur = durSec;
   const pad = Math.max(...Object.values(TAIL));
   const off = new OfflineAudioContext(
     2,
@@ -131,9 +155,10 @@ export async function renderDrums(
   const noise = noiseBuffer(off);
 
   for (const h of hits) {
-    if (h.voice === "kick") kick(off, master, h.atSec);
-    else if (h.voice === "snare") snare(off, master, noise, h.atSec);
-    else hat(off, master, noise, h.atSec, h.voice === "hatOpen");
+    const vel = Math.min(1, Math.max(0, h.velocity));
+    if (h.voice === "kick") kick(off, master, h.atSec, vel);
+    else if (h.voice === "snare") snare(off, master, noise, h.atSec, vel);
+    else hat(off, master, noise, h.atSec, h.voice === "hatOpen", vel);
   }
 
   const rendered = await off.startRendering();

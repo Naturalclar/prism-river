@@ -336,17 +336,13 @@ export class Engine {
     }
 
     const base = f.name.replace(/\.[^.]+$/, "");
-    const drums = song.notes.filter((n) => n.channel === DRUM_CHANNEL).length;
-    const voices = song.channels.filter((c) => c !== DRUM_CHANNEL);
-    if (!voices.length) {
-      this.say(
-        `${f.name}: ドラム（チャンネル10）だけの MIDI でした。内蔵シンセにドラム音源が無いので鳴らせません。`,
-      );
-      return;
-    }
+    /* チャンネル10（ドラム）も他と同じく1トラックにする。音色の対応が無い
+       ノート（タム類など）だけが鳴らずに残り、その本数を下でまとめて伝える（#58）。 */
+    const voices = song.channels;
 
     let totalMs = 0;
     let totalNotes = 0;
+    let unplayable = 0;
     for (const ch of voices) {
       const notes = song.notes.filter((n) => n.channel === ch);
       const part: MidiSong = {
@@ -360,6 +356,7 @@ export class Engine {
       const r = await renderMidi(part, ctx.sampleRate);
       totalMs += r.ms;
       totalNotes += r.rendered;
+      unplayable += r.skipped;
       const t = this.push(
         voices.length > 1 ? `${base} ${channelLabel(ch)}` : base,
         f.name,
@@ -378,7 +375,9 @@ export class Engine {
     this.say(
       `${f.name} — MIDI ${song.notes.length}音 / ${voices.length}トラック（チャンネルごと）/ ` +
         `${song.durationSec.toFixed(2)}s / 内蔵シンセで ${totalMs.toFixed(0)}ms でレンダー` +
-        (drums ? `。ドラム ${drums}音（チャンネル10）は音源が無いので鳴らしていません` : ""),
+        (unplayable
+          ? `。うち ${unplayable}音は対応する音色が無いので鳴らしていません（タム・シンバル類）`
+          : ""),
     );
   }
 
