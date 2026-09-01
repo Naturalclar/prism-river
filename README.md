@@ -166,6 +166,8 @@ Vite + TypeScript + React + oxlint + pnpm。
 
 クリップの横ドラッグも同じ理由で、動かしている間は `style.left` を直接書き、指を離したときだけ `commitOffset()` で React と再生グラフを組み直す。
 
+**`Engine` の変更は2種類ある。** 音に効く変更（トラックの増減・音量・パン・ソロ/ミュート・移動・トリム・フェード・エフェクト・バス）は `touched()` で締める。表示だけの変更（選択・ズーム・FX パネルの開閉・トランスポート）は `emit()` のまま。`touched()` は React へ流すのに加えて**書き出し済みのレンダー結果を捨てる**ので、オーディオの機能を足すときはその setter がどちらで終わるかを見ること——`emit()` で済ませると「レンダーを試聴」が編集前のミックスを鳴らす（[#49](https://github.com/Naturalclar/prism-river/issues/49)）。
+
 | ファイル | |
 | --- | --- |
 | `src/audio/engine.ts` | オーディオの全状態を持つ `Engine`（ファサード）。React 非依存 |

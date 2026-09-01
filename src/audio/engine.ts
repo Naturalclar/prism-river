@@ -180,6 +180,29 @@ export class Engine {
     this.emit();
   }
 
+  /**
+   * 音に効く変更のあとはこれで締める（#49）。表示だけの変更（選択・ズーム・
+   * FX パネルの開閉・トランスポート）は `emit()` のままでよい。
+   *
+   * オーディオの機能を足すときは、その setter がどちらで終わるかを見ること。
+   * `emit()` で済ませるとレンダー結果が古いまま残り、「レンダーを試聴」が
+   * 編集前のミックスを鳴らす——例外も無音も出ないので気づけない類になる。
+   */
+  private touched(): void {
+    this.invalidateRender();
+    this.emit();
+  }
+
+  /**
+   * レンダー結果を捨てる。試聴中ならそれも止める。作り直しはしない
+   * （レンダーは尺に比例するので、押されたときだけでよい）。
+   */
+  private invalidateRender(): void {
+    if (!this.lastRender) return;
+    this.lastRender = null;
+    this.stopAudition();
+  }
+
   /* ── グラフ ────────────────────────────────────────────────────────── */
 
   private audio(): AudioContext {
@@ -248,6 +271,7 @@ export class Engine {
     const ctx = this.audio();
     if (ctx.state === "suspended") await ctx.resume();
 
+    const before = this.tracks.length;
     for (const f of list) {
       this.say(`読み込み中: ${f.name} …`);
       /* 1本ずつ順に読む。並列にすると読み込み中のログが混ざるうえ、
@@ -258,6 +282,10 @@ export class Engine {
     if (skipped.length) {
       this.say(`${skipped.length}件を対応外としてスキップ: ${skipped.map((f) => f.name).join(" / ")}`);
     }
+    /* 再生中に足したトラックも、その場から鳴らす（#50）。移動やトリムと同じ
+       扱いで、全部読み終えてから1回だけ組み直す（1本ごとに組み直すと、
+       既に鳴っているトラックがファイルの数だけ途切れる）。 */
+    if (this.tracks.length > before) this.rebuildIfPlaying();
     this.refreshTelemetry();
     this.emit();
   }
@@ -417,6 +445,8 @@ export class Engine {
     gain.gain.value = t.vol;
     this.tracks.push(t);
     this.balance();
+    /* トラックが増えた時点で、既存のレンダー結果は今のミックスではない。 */
+    this.invalidateRender();
     return t;
   }
 
@@ -452,7 +482,7 @@ export class Engine {
     if (!this.tracks.length) this.halt();
     this.refreshTelemetry();
     this.balance();
-    this.emit();
+    this.touched();
   }
 
   private find(id: string): Track | undefined {
@@ -557,7 +587,7 @@ export class Engine {
     this.pxPerSec = clamp(meta.pxPerSec, 8, 400);
     this.balance();
     this.refreshTelemetry();
-    this.emit();
+    this.touched();
   }
 
   /* ── 録音 ──────────────────────────────────────────────────────────── */
@@ -609,6 +639,9 @@ export class Engine {
       /* 保存（#18）用に、エンコード済みの録音チャンクを元ファイルとして持たせる。 */
       const ext = blob.type.includes("ogg") ? "ogg" : blob.type.includes("mp4") ? "m4a" : "webm";
       this.push(name, `${name}.${ext}`, blob, buf, ms);
+      /* 再生に重ねて録った場合、止めた時点から録音トラックも鳴る（#50）。
+         これが無いと、オーバーダブは一度停止しないと聴き返せない。 */
+      this.rebuildIfPlaying();
       this.refreshTelemetry();
       this.say(
         `${name} — ${buf.duration.toFixed(2)}s / ${buf.numberOfChannels}ch / ${buf.sampleRate}Hz / デコード ${ms.toFixed(0)}ms`,
@@ -644,6 +677,8 @@ export class Engine {
     if (!t || t.bus === bus) return;
     t.bus = bus;
     this.routeTrack(t);
+    this.invalidateRender();
+    /* say() が emit まで面倒を見るので、ここは捨てるだけでよい。 */
     this.say(
       bus
         ? `${t.name} → ${BUS_INFO[bus].label}バス（${BUS_INFO[bus].sister}）`
@@ -654,7 +689,7 @@ export class Engine {
   setBusVol(bus: BusId, v: number): void {
     this.busVol[bus] = v;
     if (this.busGain) this.busGain[bus].gain.value = v;
-    this.emit();
+    this.touched();
   }
 
   /* ── ミキサー ──────────────────────────────────────────────────────── */
@@ -672,7 +707,7 @@ export class Engine {
     if (!t) return;
     t.vol = v;
     this.balance();
-    this.emit();
+    this.touched();
   }
 
   setPan(id: string, v: number): void {
@@ -680,7 +715,7 @@ export class Engine {
     if (!t) return;
     t.panv = v;
     t.pan.pan.value = v;
-    this.emit();
+    this.touched();
   }
 
   toggleSolo(id: string): void {
@@ -688,7 +723,7 @@ export class Engine {
     if (!t) return;
     t.solo = !t.solo;
     this.balance();
-    this.emit();
+    this.touched();
   }
 
   toggleMute(id: string): void {
@@ -696,13 +731,13 @@ export class Engine {
     if (!t) return;
     t.mute = !t.mute;
     this.balance();
-    this.emit();
+    this.touched();
   }
 
   setMaster(v: number): void {
     this.masterVol = v;
     if (this.master) this.master.gain.value = v;
-    this.emit();
+    this.touched();
   }
 
   setPxPerSec(v: number): void {
@@ -725,7 +760,7 @@ export class Engine {
     if (!t) return;
     this.say(`${t.name} の開始位置: ${t.offset.toFixed(2)}s`);
     this.rebuildIfPlaying();
-    this.emit();
+    this.touched();
   }
 
   /* ── トリム ────────────────────────────────────────────────────────── */
@@ -760,7 +795,7 @@ export class Engine {
       `${t.name} をトリム: 実効 ${(t.trimEnd - t.trimStart).toFixed(2)}s（頭 ${t.trimStart.toFixed(2)}s）`,
     );
     this.rebuildIfPlaying();
-    this.emit();
+    this.touched();
   }
 
   /* ── エフェクト ────────────────────────────────────────────────────── */
@@ -777,7 +812,7 @@ export class Engine {
     t.fx.eq[band] = dB;
     const node = band === "low" ? t.fxLow : band === "mid" ? t.fxMid : t.fxHigh;
     node.gain.value = dB;
-    this.emit();
+    this.touched();
   }
 
   setComp(id: string, key: "threshold" | "ratio" | "attack" | "release", v: number): void {
@@ -785,7 +820,7 @@ export class Engine {
     if (!t) return;
     t.fx.comp[key] = v;
     t.fxComp[key].value = v;
-    this.emit();
+    this.touched();
   }
 
   /**
@@ -825,7 +860,7 @@ export class Engine {
     } else {
       t.fxHigh.connect(t.pan);
     }
-    this.emit();
+    this.touched();
   }
 
   /* ── フェード ──────────────────────────────────────────────────────── */
@@ -848,7 +883,7 @@ export class Engine {
       `${t.name} のフェード: イン ${t.fadeIn.toFixed(2)}s / アウト ${t.fadeOut.toFixed(2)}s`,
     );
     this.rebuildIfPlaying();
-    this.emit();
+    this.touched();
   }
 
   /** 再生中にクリップの形が変わったら、位置を保ったままソースを組み直す。 */
@@ -1104,12 +1139,7 @@ export class Engine {
   audition(): void {
     if (!this.lastRender || !this.ctx || !this.master) return;
     if (this.auditionSrc) {
-      try {
-        this.auditionSrc.stop();
-      } catch {
-        /* 既に終わっている */
-      }
-      this.auditionSrc = null;
+      this.stopAudition();
       this.emit();
       return;
     }
@@ -1130,5 +1160,15 @@ export class Engine {
     this.say(
       `レンダー結果を再生中（${this.lastRender.duration.toFixed(2)}s / ${this.lastRender.numberOfChannels}ch）。`,
     );
+  }
+
+  private stopAudition(): void {
+    if (!this.auditionSrc) return;
+    try {
+      this.auditionSrc.stop();
+    } catch {
+      /* 既に終わっている */
+    }
+    this.auditionSrc = null;
   }
 }
