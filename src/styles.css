@@ -216,6 +216,37 @@ input[type=range]::-moz-range-thumb{
 .fxpanel .head-pot span{width:34px}
 .fxpanel .head-pot em{width:48px}
 .fxpanel input[type=range]:disabled{opacity:.35; cursor:default}
+
+/* ドラムの格子（#54）。FX パネルと同じ見た目で、右隣に並べる。 */
+.drumpanel{
+  position:fixed; left:274px; bottom:56px; z-index:20;
+  background:var(--panel); border:1px solid var(--line-strong); border-radius:6px;
+  box-shadow:var(--shadow); padding:10px 12px;
+  display:flex; flex-direction:column; gap:7px;
+}
+.drumpanel .fx-top{display:flex; align-items:center; gap:8px}
+.drumpanel .fx-top b{font-size:12px; flex:1 1 auto}
+.drumpanel .fx-top span{
+  font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-faint);
+}
+.drumpanel .head-pot span{width:34px}
+.drumpanel .head-pot em{width:34px}
+.drum-grid{display:flex; flex-direction:column; gap:3px}
+.drum-row{display:flex; align-items:center; gap:3px}
+.drum-name{
+  width:74px; flex:0 0 auto; font-size:10px; color:var(--text-faint);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.drum-step{
+  width:16px; height:16px; flex:0 0 auto; padding:0; cursor:pointer;
+  background:var(--bg); border:1px solid var(--line); border-radius:3px;
+}
+/* 拍の頭を少し濃くして、4つ区切りが目で追えるようにする。 */
+.drum-step.beat{border-color:var(--line-strong)}
+.drum-step.on{background:var(--accent); border-color:var(--accent)}
+.drum-presets{display:flex; gap:5px; flex-wrap:wrap}
+.drum-presets .ghost{padding:3px 8px; font-size:10.5px}
+.drum-note{color:var(--text-faint); font-size:9.5px; line-height:1.4}
 .clip .tag{
   position:absolute; left:5px; top:3px; font-size:9.5px; letter-spacing:.05em;
   color:var(--tc); font-weight:600; pointer-events:none;

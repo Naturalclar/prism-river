@@ -8,6 +8,7 @@ import {
 } from "react";
 import { engine } from "./audio/instance";
 import { Deck } from "./components/Deck";
+import { DrumPanel } from "./components/DrumPanel";
 import { FxPanel } from "./components/FxPanel";
 import { Probe } from "./components/Probe";
 import { Reel } from "./components/Reel";
@@ -161,7 +162,12 @@ export default function App() {
           <div className="rack-top">Tracks</div>
           <div className="rack-list">
             {snap.tracks.map((t) => (
-              <TrackHead t={t} fxOpen={snap.fxId === t.id} key={t.id} />
+              <TrackHead
+                t={t}
+                fxOpen={snap.fxId === t.id}
+                drumsOpen={snap.drumsId === t.id}
+                key={t.id}
+              />
             ))}
           </div>
         </div>
@@ -172,6 +178,7 @@ export default function App() {
       </div>
 
       <FxPanel snap={snap} />
+      <DrumPanel snap={snap} />
       <Probe snap={snap} />
     </>
   );

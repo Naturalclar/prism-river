@@ -3,7 +3,15 @@ import { engine } from "../audio/instance";
 import { BUS_IDS, BUS_INFO, type TrackView } from "../audio/engine";
 import { panLabel } from "../lib/time";
 
-export function TrackHead({ t, fxOpen }: { t: TrackView; fxOpen: boolean }) {
+export function TrackHead({
+  t,
+  fxOpen,
+  drumsOpen,
+}: {
+  t: TrackView;
+  fxOpen: boolean;
+  drumsOpen: boolean;
+}) {
   return (
     <div
       className={`head${t.selected ? " selected" : ""}`}
@@ -46,6 +54,18 @@ export function TrackHead({ t, fxOpen }: { t: TrackView; fxOpen: boolean }) {
         >
           FX
         </button>
+        {/* ドラムトラックだけ格子を開き直せるようにする（#54）。 */}
+        {t.drums && (
+          <button
+            className="tog"
+            aria-pressed={drumsOpen}
+            title="ドラムパターン"
+            aria-label={`${t.name} のドラム`}
+            onClick={() => engine.toggleDrumPanel(t.id)}
+          >
+            D
+          </button>
+        )}
         <button
           className="tog"
           title="削除"
