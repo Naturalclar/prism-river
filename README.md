@@ -15,7 +15,7 @@ pnpm install
 pnpm dev
 ```
 
-開いたページに mp3 / wav / m4a / ogg / opus / flac / webm（音声）をドロップするだけ。1ファイル＝1トラック。音声つき動画（mp4 / mov / webm / mkv）をドロップすると、音声トラックだけを取り込む。実際に読めるかはブラウザの `decodeAudioData` 次第（下の対応表）。
+開いたページに mp3 / wav / m4a / ogg / opus / flac / webm（音声）をドロップするだけ。1ファイル＝1トラック。音声つき動画（mp4 / mov / webm / mkv）をドロップすると音声トラックだけを取り込む。**MIDI（.mid）** は内蔵シンセでレンダーしてオーディオトラックにする。実際に読めるかはブラウザの `decodeAudioData` 次第（下の対応表）。
 
 | 操作 | |
 | --- | --- |
@@ -50,6 +50,7 @@ pnpm dev
 - `OfflineAudioContext` によるミックスの一括レンダーと WAV 書き出し
 - webm（Opus）書き出し（`MediaStreamAudioDestinationNode` + `MediaRecorder`。一括レンダーと違い**実時間かかる**のが仕様で、WAV の数百倍速との対比もこの台の計測対象。1分ステレオで WAV 約10MB に対し webm は約1MB）
 - MP3（CBR 192kbps）書き出し（**このリポジトリ最初の WASM**。LAME 3.100 の WASM ビルドを Worker で回す。オフラインレンダーの結果をエンコードするので webm と違い実時間はかからない。3秒ミックスで WAV 0.5MB → MP3 0.07MB）
+- MIDI（`.mid`）の取り込み（#46）。SMF を自前で解析し（`src/lib/midi.ts`・依存ゼロ）、内蔵シンセ（`OscillatorNode` + ADSR）でオフラインレンダーして普通のオーディオトラックにする。**チャンネルごとに1本のトラック**になり、以降はトリム・フェード・EQ/コンプ・バス・書き出し・保存が全部そのまま効く。テンポチェンジ・running status・velocity 0 の note off に対応。ドラム（チャンネル10）は音源が無いので鳴らさず、その旨をログに出す
 - プロジェクトの保存・復元（設定は `localStorage`、音声は読み込んだ元ファイルのまま `IndexedDB`。どちらも端末内で完結し、サーバーには何も送らない）
 
 ## 計測（2026-08-26 / 44.1kHz ステレオ）
@@ -72,6 +73,18 @@ pnpm dev
 エフェクトの追い計測（2026-08-26 / ヘッドレス Chromium / 30秒ステレオ1トラック）: オフラインレンダーは素で **50 ms＝約600倍速**、EQ 3バンド＋コンプを挿すと **265 ms＝約113倍速**。挿入で約5倍かかるが、それでも実時間の100倍以上で回るので、**エフェクトを足しても書き出し速度は問題にならない**。
 
 MP3 書き出しの計測（2026-08-26 / ヘッドレス Chromium / 3秒ステレオ2トラック）: レンダー **10 ms** + WASM（LAME・シングルスレッド）エンコード **81 ms＝約37倍速**。「エンコードを足しても書き出しは数百倍速のままか」（[#20](https://github.com/Naturalclar/prism-river/issues/20)）への答えは **No で、エンコードが支配的になり数十倍速に落ちる**——ただし実時間の30倍超なので、書き出し待ちが問題になる尺ではない（5分の曲でも10秒以内の見込み）。WASM 部分は Worker チャンク（約180KB）に隔離され、メインバンドルには乗らない。
+
+### MIDI レンダーの実測（2026-09-01 / ヘッドレス Chromium）
+
+内蔵シンセ（ノートごとに `OscillatorNode` + ADSR）でのオフラインレンダー（[#46](https://github.com/Naturalclar/prism-river/issues/46)）。
+
+| ノート数 × チャンネル | 曲の長さ | レンダー |
+| --- | --- | --- |
+| 100音 × 1ch | 12.9 s | 198 ms＝約65倍速 |
+| 1,000音 × 4ch | 31.7 s | 4,288 ms＝約7倍速 |
+| 5,000音 × 8ch | 78.6 s | 59,377 ms＝約1倍速 |
+
+**倍率はノート数とチャンネル数の両方で落ちる。** チャンネルごとに別々の `OfflineAudioContext` を回すので、レンダー総量は「曲の長さ × チャンネル数」に比例し、そこにノート数ぶんのノード生成コストが乗る。実用域（1,000音・4ch 程度の曲）なら4秒前後で終わるが、**密な曲では実時間に近づく**。ここが問題になったら、Web Audio のノードを積むのをやめて Float32 に直接波形を書く（自前シンセ）方が速い——ただし段1 では「標準ノードだけで鳴らす」ことを優先した。
 
 ### 長尺・複数トラックの実測（2026-08-26 / ヘッドレス Chromium / メモリ 15GB・4コア）
 
@@ -161,6 +174,8 @@ Vite + TypeScript + React + oxlint + pnpm。
 | `src/audio/bounce.ts` | オフライン一括レンダーと WAV / webm の書き出し・保存 |
 | `src/audio/recorder.ts` | マイク録音のセッション管理 |
 | `src/audio/project.ts` | 保存（#18）用メタの構築 |
+| `src/audio/midi.ts` | MIDI の内蔵シンセレンダー（`OfflineAudioContext`） |
+| `src/lib/midi.ts` | SMF 解析（純粋関数）。tick → 秒、テンポマップ、running status |
 | `src/lib/peaks.ts` | 波形のピーク計算（純粋関数） |
 | `src/lib/wav.ts` | WAV エンコード（純粋関数） |
 | `src/lib/time.ts` | 時間表示・ルーラーの刻み（純粋関数） |
@@ -168,6 +183,6 @@ Vite + TypeScript + React + oxlint + pnpm。
 | `src/lib/fade.ts` | フェードのクランプとランプ区間の計算（純粋関数） |
 | `src/components/` | 表示のみ。状態は持たない |
 
-`src/lib/` の5つは純粋関数なので単体テストがあり、E2E のテスト音源も `src/lib/wav.ts` で生成している（権利のある音源をリポジトリに置かないため）。
+`src/lib/` の各モジュールは純粋関数なので単体テストがあり、E2E のテスト音源も `src/lib/wav.ts` で生成している（権利のある音源をリポジトリに置かないため）。
 
 ローカルに別の Chromium がある環境では `CHROMIUM_PATH=/path/to/chrome pnpm test:e2e` で指定できる。

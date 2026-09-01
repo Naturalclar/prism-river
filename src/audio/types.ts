@@ -33,6 +33,8 @@ export type Track = {
   /** 元ファイル名（拡張子つき）と、その中身。保存（#18）でそのまま書く。 */
   srcName: string;
   srcBytes: Blob;
+  /** MIDI 由来なら元のチャンネル、そうでなければ null（#46）。 */
+  midiChannel: number | null;
   buf: AudioBuffer;
   gain: GainNode;
   pan: StereoPannerNode;
@@ -98,6 +100,8 @@ export type Telemetry = {
   webm: string;
   /** MP3（LAME / WASM）のエンコード時間と倍率。#20 の計測対象。 */
   mp3: string;
+  /** MIDI の内蔵シンセレンダー（音数 / ms / 倍率）。#46 の計測対象。 */
+  midi: string;
 };
 
 export type Snapshot = {

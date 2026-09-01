@@ -84,3 +84,73 @@ export function makeGarbage(name: string, size = 4096): string {
   for (let i = 0; i < size; i++) bytes[i] = (i * 37 + 11) % 251;
   return put(name, bytes);
 }
+
+/* ── MIDI（#46）─────────────────────────────────────────────────────── */
+
+function varInt(n: number): number[] {
+  const out = [n & 0x7f];
+  let v = n >> 7;
+  while (v > 0) {
+    out.unshift((v & 0x7f) | 0x80);
+    v >>= 7;
+  }
+  return out;
+}
+
+function chunk(id: string, body: number[]): number[] {
+  const len = body.length;
+  return [
+    ...[...id].map((c) => c.charCodeAt(0)),
+    (len >>> 24) & 0xff,
+    (len >>> 16) & 0xff,
+    (len >>> 8) & 0xff,
+    len & 0xff,
+    ...body,
+  ];
+}
+
+/**
+ * 単純な SMF を書く。既定テンポ（120BPM・480tpqn）で、note ごとに
+ * `[開始拍, 長さ拍, ノート番号]` を与える。権利のある MIDI を置かないため。
+ */
+export function makeMidi(
+  name: string,
+  notes: { atBeat: number; beats: number; midi: number; channel?: number }[],
+  format = 0,
+): string {
+  const TPQN = 480;
+  /* 絶対 tick のイベント列に開いてから、デルタに直す。 */
+  const events: { tick: number; bytes: number[] }[] = [];
+  for (const n of notes) {
+    const ch = n.channel ?? 0;
+    events.push({ tick: Math.round(n.atBeat * TPQN), bytes: [0x90 | ch, n.midi, 100] });
+    events.push({
+      tick: Math.round((n.atBeat + n.beats) * TPQN),
+      bytes: [0x80 | ch, n.midi, 0],
+    });
+  }
+  events.sort((a, b) => a.tick - b.tick);
+  let prev = 0;
+  const body: number[] = [];
+  for (const e of events) {
+    body.push(...varInt(e.tick - prev), ...e.bytes);
+    prev = e.tick;
+  }
+  body.push(0x00, 0xff, 0x2f, 0x00);
+
+  const bytes = new Uint8Array([
+    ...chunk("MThd", [0, format, 0, 1, (TPQN >> 8) & 0xff, TPQN & 0xff]),
+    ...chunk("MTrk", body),
+  ]);
+  return put(name, bytes);
+}
+
+/** format 2（対応外）の SMF。理由の分かるエラーが出ることの確認用。 */
+export function makeUnsupportedMidi(name: string): string {
+  const body = [0x00, 0x90, 60, 100, 0x60, 0x80, 60, 0, 0x00, 0xff, 0x2f, 0x00];
+  const bytes = new Uint8Array([
+    ...chunk("MThd", [0, 2, 0, 1, 0x01, 0xe0]),
+    ...chunk("MTrk", body),
+  ]);
+  return put(name, bytes);
+}

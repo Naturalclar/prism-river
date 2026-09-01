@@ -1,4 +1,5 @@
 import { encodeMp3InWorker } from "./mp3";
+import { DRUM_CHANNEL, MidiParseError, parseSmf, type MidiSong } from "../lib/midi";
 import { MP3_KBPS } from "../lib/mp3";
 import { computePeaks, type Peaks } from "../lib/peaks";
 import { BUS_IDS, type BusId, type BusVols, type ProjectMeta } from "../lib/store";
@@ -7,6 +8,7 @@ import { trimEndTo, trimStartTo } from "../lib/trim";
 import { encodeWav } from "../lib/wav";
 import { deliverBlob, deliverWav, recordToWebm, renderMix, webmSupported } from "./bounce";
 import { EQ_HIGH_HZ, EQ_LOW_HZ, EQ_MID_HZ, makeBiquad, rms, scheduleFades } from "./graph";
+import { renderMidi } from "./midi";
 import { projectMetaOf } from "./project";
 import { collectRecording, openMic, type RecSession } from "./recorder";
 import {
@@ -33,9 +35,23 @@ const AUDIO_EXT = /\.(mp3|wav|m4a|aac|ogg|oga|opus|flac|webm|weba)$/i;
    webm は音声にも動画にも使われるので、拡張子では動画扱いしない。 */
 const VIDEO_EXT = /\.(mp4|mov|m4v|mkv)$/i;
 
+/* MIDI は音声ではなく音符イベントなので、decodeAudioData では永久に読めない（#46）。
+   拡張子から audio/midi が付いて入口を通ってしまうため、ここで先に振り分けて
+   SMF 解析＋内蔵シンセのレンダー経路へ送る。 */
+const MIDI_EXT = /\.(mid|midi|smf)$/i;
+
 /** エラー文言の分岐用。音声の取り込みか、動画からの音声取り出しか。 */
 function isVideoFile(f: File): boolean {
   return f.type.startsWith("video/") || VIDEO_EXT.test(f.name);
+}
+
+function isMidiFile(f: { name: string; type?: string }): boolean {
+  return /^audio\/(x-)?midi$/.test(f.type ?? "") || MIDI_EXT.test(f.name);
+}
+
+/** GM のチャンネル番号（0 始まり）を人が読む名前にする。 */
+function channelLabel(channel: number): string {
+  return channel === DRUM_CHANNEL ? "ドラム" : `ch${channel + 1}`;
 }
 
 /**
@@ -86,6 +102,7 @@ export class Engine {
     offline: "未実行",
     webm: "未実行",
     mp3: "未実行",
+    midi: "未実行",
     offlineOk: false,
   };
 
@@ -216,14 +233,14 @@ export class Engine {
   async ingest(files: ArrayLike<File>): Promise<void> {
     const all = Array.from(files);
     const list = all.filter(
-      (f) => f.type.startsWith("audio/") || AUDIO_EXT.test(f.name) || isVideoFile(f),
+      (f) => f.type.startsWith("audio/") || AUDIO_EXT.test(f.name) || isVideoFile(f) || isMidiFile(f),
     );
     /* 対応外は黙って落とさず、名前を挙げて伝える（#22）。 */
     const skipped = all.filter((f) => !list.includes(f));
     if (!list.length) {
       this.say(
         skipped.length
-          ? `対応外のファイルのみでした: ${skipped.map((f) => f.name).join(" / ")}（読める拡張子: mp3 / wav / m4a / aac / ogg / opus / flac / webm と動画 mp4 / mov / mkv）`
+          ? `対応外のファイルのみでした: ${skipped.map((f) => f.name).join(" / ")}（読める拡張子: mp3 / wav / m4a / aac / ogg / opus / flac / webm、動画 mp4 / mov / mkv、MIDI mid / midi）`
           : "音声（または音声つき動画）ファイルが見つかりませんでした。",
       );
       return;
@@ -236,13 +253,99 @@ export class Engine {
       /* 1本ずつ順に読む。並列にすると読み込み中のログが混ざるうえ、
          デコード済みの PCM が一度にメモリへ乗る。 */
       // oxlint-disable-next-line no-await-in-loop
-      await this.decodeInto(ctx, f);
+      await (isMidiFile(f) ? this.ingestMidi(ctx, f) : this.decodeInto(ctx, f));
     }
     if (skipped.length) {
       this.say(`${skipped.length}件を対応外としてスキップ: ${skipped.map((f) => f.name).join(" / ")}`);
     }
     this.refreshTelemetry();
     this.emit();
+  }
+
+  /**
+   * MIDI（#46）。音声ではなく音符イベントなので decodeAudioData には渡さず、
+   * SMF を解析して内蔵シンセでレンダーし、チャンネルごとに1本のトラックにする。
+   * AudioBuffer になった時点で以降の機能（トリム / FX / バス / 書き出し / 保存）は
+   * そのまま効く。
+   */
+  private async ingestMidi(ctx: AudioContext, f: File): Promise<void> {
+    let song: MidiSong;
+    try {
+      song = parseSmf(await f.arrayBuffer());
+    } catch (err) {
+      /* 「ブラウザが対応していない」ではなく、読めない理由をそのまま出す。 */
+      this.say(
+        err instanceof MidiParseError
+          ? `${f.name}: ${err.message}`
+          : `${f.name} を MIDI として読めませんでした。`,
+      );
+      return;
+    }
+
+    const base = f.name.replace(/\.[^.]+$/, "");
+    const drums = song.notes.filter((n) => n.channel === DRUM_CHANNEL).length;
+    const voices = song.channels.filter((c) => c !== DRUM_CHANNEL);
+    if (!voices.length) {
+      this.say(
+        `${f.name}: ドラム（チャンネル10）だけの MIDI でした。内蔵シンセにドラム音源が無いので鳴らせません。`,
+      );
+      return;
+    }
+
+    let totalMs = 0;
+    let totalNotes = 0;
+    for (const ch of voices) {
+      const notes = song.notes.filter((n) => n.channel === ch);
+      const part: MidiSong = {
+        ...song,
+        notes,
+        channels: [ch],
+        durationSec: notes.reduce((m, n) => Math.max(m, n.startSec + n.durSec), 0),
+      };
+      this.say(`${f.name}: ${channelLabel(ch)} をレンダー中（${notes.length}音）…`);
+      // oxlint-disable-next-line no-await-in-loop
+      const r = await renderMidi(part, ctx.sampleRate);
+      totalMs += r.ms;
+      totalNotes += r.rendered;
+      const t = this.push(
+        voices.length > 1 ? `${base} ${channelLabel(ch)}` : base,
+        f.name,
+        f,
+        r.buf,
+        r.ms,
+      );
+      t.midiChannel = ch;
+    }
+    this.decodeTotal += totalMs;
+    const rt = totalMs > 0 ? Math.round(song.durationSec / (totalMs / 1000)) : 0;
+    this.telemetry = {
+      ...this.telemetry,
+      midi: `${totalNotes}音 / ${totalMs.toFixed(0)} ms（約${rt}倍速）`,
+    };
+    this.say(
+      `${f.name} — MIDI ${song.notes.length}音 / ${voices.length}トラック（チャンネルごと）/ ` +
+        `${song.durationSec.toFixed(2)}s / 内蔵シンセで ${totalMs.toFixed(0)}ms でレンダー` +
+        (drums ? `。ドラム ${drums}音（チャンネル10）は音源が無いので鳴らしていません` : ""),
+    );
+  }
+
+  /** 保存された MIDI から、指定チャンネルぶんだけ鳴らし直す（復元用）。 */
+  private async renderMidiChannel(
+    ctx: AudioContext,
+    bytes: ArrayBuffer,
+    channel: number | undefined,
+  ): Promise<AudioBuffer> {
+    const song = parseSmf(bytes);
+    const notes =
+      channel === undefined ? song.notes : song.notes.filter((n) => n.channel === channel);
+    const part: MidiSong = {
+      ...song,
+      notes,
+      channels: channel === undefined ? song.channels : [channel],
+      durationSec: notes.reduce((m, n) => Math.max(m, n.startSec + n.durSec), 0),
+    };
+    const r = await renderMidi(part, ctx.sampleRate);
+    return r.buf;
   }
 
   private async decodeInto(ctx: AudioContext, f: File): Promise<void> {
@@ -286,6 +389,7 @@ export class Engine {
       name,
       srcName,
       srcBytes,
+      midiChannel: null,
       buf,
       gain,
       pan,
@@ -415,11 +519,17 @@ export class Engine {
       // oxlint-disable-next-line no-await-in-loop
       const bytes = await blobs[i].arrayBuffer();
       const t0 = performance.now();
+      /* MIDI 由来のトラックは元バイト列が .mid なので decodeAudioData では
+         復元できない。取り込みと同じ解析＋レンダーを通す（#46）。 */
+      const decoding = isMidiFile({ name: m.srcName })
+        ? this.renderMidiChannel(ctx, bytes, m.midiChannel)
+        : ctx.decodeAudioData(bytes);
       // oxlint-disable-next-line no-await-in-loop
-      const buf = await ctx.decodeAudioData(bytes);
+      const buf = await decoding;
       const ms = performance.now() - t0;
       this.decodeTotal += ms;
       const t = this.push(m.name, m.srcName, blobs[i], buf, ms);
+      t.midiChannel = m.midiChannel ?? null;
       t.vol = clamp(m.vol, 0, 1.4);
       t.panv = clamp(m.panv, -1, 1);
       t.pan.pan.value = t.panv;
