@@ -40,3 +40,34 @@ export function snapOffset(
   const hit = best as Best | null;
   return hit ? { offset: hit.offset, snapped: hit.point } : { offset, snapped: null };
 }
+
+export type EdgeSnapResult = {
+  /** スナップ後の位置（秒・タイムライン上）。 */
+  at: number;
+  /** 吸着したスナップ点（秒）。吸着しなかったら null。 */
+  snapped: number | null;
+};
+
+/**
+ * トリム（長さ変更）のスナップ（#84）。
+ *
+ * 移動の `snapOffset` は自分の左右端の2候補から選ぶが、トリムは**掴んでいる端
+ * そのもの**が唯一の候補なので、単純に最も近いスナップ点へ寄せるだけでよい。
+ *
+ * 引数も戻り値もタイムライン上の秒。バッファ内の時刻との変換は呼び出し側
+ * （Engine）の仕事——`timeline = offset + (sec - trimStart)` で、この式は
+ * 左端（offset が連動する）でも右端でも同じ形になる。
+ */
+export function snapEdge(
+  at: number,
+  targets: readonly number[],
+  thresholdSec: number,
+): EdgeSnapResult {
+  let best: { point: number; dist: number } | null = null;
+  for (const p of targets) {
+    const dist = Math.abs(at - p);
+    if (dist > thresholdSec) continue;
+    if (!best || dist < best.dist) best = { point: p, dist };
+  }
+  return best ? { at: best.point, snapped: best.point } : { at, snapped: null };
+}

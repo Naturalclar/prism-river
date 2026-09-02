@@ -80,17 +80,22 @@ export function Clip({ t, pxPerSec }: { t: TrackView; pxPerSec: number }) {
         b.classList.toggle("snapped", r.snapped);
       }
     } else if (d.mode === "start") {
-      const r = engine.trimTo(t.id, "start", d.ts0 + dx / pxPerSec);
+      /* トリムも移動と同じで、Shift で吸着を切る（#84）。 */
+      const r = engine.trimTo(t.id, "start", d.ts0 + dx / pxPerSec, !e.shiftKey);
       if (r) {
         b.style.left = `${r.offset * pxPerSec}px`;
         b.style.width = `${Math.max(1, Math.round(r.duration * pxPerSec))}px`;
+        b.classList.toggle("snapped", r.snapped);
         /* 波形は画面上の位置を保つ。左端が波形を「削って」いくように見せる。 */
         if (wave.current)
           wave.current.style.transform = `translateX(${-(r.trimStart - d.ts0) * pxPerSec}px)`;
       }
     } else if (d.mode === "end") {
-      const r = engine.trimTo(t.id, "end", d.ts0 + d.dur0 + dx / pxPerSec);
-      if (r) b.style.width = `${Math.max(1, Math.round(r.duration * pxPerSec))}px`;
+      const r = engine.trimTo(t.id, "end", d.ts0 + d.dur0 + dx / pxPerSec, !e.shiftKey);
+      if (r) {
+        b.style.width = `${Math.max(1, Math.round(r.duration * pxPerSec))}px`;
+        b.classList.toggle("snapped", r.snapped);
+      }
     } else if (d.mode === "fadeIn") {
       const r = engine.fadeTo(t.id, "in", d.fi0 + dx / pxPerSec);
       if (r) {

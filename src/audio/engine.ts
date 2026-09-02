@@ -21,7 +21,7 @@ import {
 import { MP3_KBPS } from "../lib/mp3";
 import { computePeaks, type Peaks } from "../lib/peaks";
 import { emptyTake, growTake, peakOfBytes, type RecTake } from "../lib/rectake";
-import { SNAP_PX, snapOffset } from "../lib/snap";
+import { SNAP_PX, snapEdge, snapOffset } from "../lib/snap";
 import { BUS_IDS, type BusId, type BusVols, type ProjectMeta } from "../lib/store";
 import { clamp } from "../lib/time";
 import { trimEndTo, trimStartTo } from "../lib/trim";
@@ -1214,16 +1214,25 @@ export class Engine {
       t.offset = raw;
       return { offset: raw, snapped: false };
     }
-    /* スナップ点: 0 秒と、他トラックのクリップの開始・終端（実効長）。 */
-    const targets = [0];
-    for (const x of this.tracks) {
-      if (x === t) continue;
-      targets.push(x.offset, x.offset + (x.trimEnd - x.trimStart));
-    }
     /* しきい値はピクセルで持つ。ズームインするほど精密になる。 */
-    const r = snapOffset(raw, t.trimEnd - t.trimStart, targets, SNAP_PX / this.pxPerSec);
+    const r = snapOffset(
+      raw,
+      t.trimEnd - t.trimStart,
+      this.snapTargets(t),
+      SNAP_PX / this.pxPerSec,
+    );
     t.offset = r.offset;
     return { offset: r.offset, snapped: r.snapped !== null };
+  }
+
+  /** スナップ点: 0 秒と、自分以外のクリップの開始・終端（実効長）。移動とトリムで共有。 */
+  private snapTargets(self: Track): number[] {
+    const targets = [0];
+    for (const x of this.tracks) {
+      if (x === self) continue;
+      targets.push(x.offset, x.offset + (x.trimEnd - x.trimStart));
+    }
+    return targets;
   }
 
   /** ドラッグを離したときに呼ぶ。ここで初めて React と再生を組み直す。 */
@@ -1240,23 +1249,51 @@ export class Engine {
   /**
    * 端のドラッグ中に呼ぶ。クランプ後の値を返すので、呼び出し側はそれで
    * DOM を直に動かす（再描画はしない）。左端は offset が連動する。
+   * `snap: false`（Shift ドラッグ）で吸着を切る——移動（nudgeOffset）と同じ流儀。
    */
   trimTo(
     id: string,
     edge: "start" | "end",
     sec: number,
-  ): { offset: number; trimStart: number; duration: number } | null {
+    snap = true,
+  ): { offset: number; trimStart: number; duration: number; snapped: boolean } | null {
     const t = this.find(id);
     if (!t) return null;
     const span = { offset: t.offset, trimStart: t.trimStart, trimEnd: t.trimEnd };
-    const next = edge === "start" ? trimStartTo(span, sec) : trimEndTo(span, t.buf.duration, sec);
+
+    /* `sec` はバッファ内の時刻、スナップ点はタイムライン上の時刻なので変換する。
+       `timeline = offset + (sec - trimStart)` は、左端（offset が連動して動く）でも
+       右端でも同じ形になる。 */
+    const toTimeline = (v: number) => span.offset + (v - span.trimStart);
+    let want = sec;
+    let point: number | null = null;
+    if (snap) {
+      const targets = this.snapTargets(t);
+      const r = snapEdge(toTimeline(sec), targets, SNAP_PX / this.pxPerSec);
+      point = r.snapped;
+      if (point !== null) want = sec + (r.at - toTimeline(sec));
+    }
+
+    const next = edge === "start" ? trimStartTo(span, want) : trimEndTo(span, t.buf.duration, want);
     if (next.trimStart !== t.trimStart || next.trimEnd !== t.trimEnd || next.offset !== t.offset) {
       t.trimStart = next.trimStart;
       t.trimEnd = next.trimEnd;
       t.offset = next.offset;
       t.peaks = null;
     }
-    return { offset: t.offset, trimStart: t.trimStart, duration: t.trimEnd - t.trimStart };
+
+    /* 最短長（MIN_CLIP）やバッファ全長に阻まれてスナップ点まで届かないことがある。
+       届いていないのに枠を光らせると嘘になるので、クランプ後の実際の端で判定する。 */
+    const landed =
+      edge === "start" ? t.offset : t.offset + (t.trimEnd - t.trimStart);
+    const snapped = point !== null && Math.abs(landed - point) < 1e-6;
+
+    return {
+      offset: t.offset,
+      trimStart: t.trimStart,
+      duration: t.trimEnd - t.trimStart,
+      snapped,
+    };
   }
 
   /** トリムのドラッグを離したときに呼ぶ。 */

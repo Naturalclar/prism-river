@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { snapOffset } from "./snap";
+import { snapEdge, snapOffset } from "./snap";
 
 /* しきい値 0.1s（既定ズーム 70px/s で約 7px 相当）で見る。 */
 const TH = 0.1;
@@ -41,5 +41,28 @@ describe("snapOffset", () => {
 
   it("スナップ点が無ければ素通し", () => {
     expect(snapOffset(1.23, 1, [], TH)).toEqual({ offset: 1.23, snapped: null });
+  });
+});
+
+describe("snapEdge", () => {
+  it("しきい値内なら最も近いスナップ点に吸着する", () => {
+    expect(snapEdge(1.95, [2], TH)).toEqual({ at: 2, snapped: 2 });
+    expect(snapEdge(2.05, [2], TH)).toEqual({ at: 2, snapped: 2 });
+  });
+
+  it("しきい値の外なら素通し", () => {
+    expect(snapEdge(1.8, [2], TH)).toEqual({ at: 1.8, snapped: null });
+  });
+
+  it("候補が複数あればずれが最小のものを採る", () => {
+    expect(snapEdge(2.06, [2, 2.1], TH)).toEqual({ at: 2.1, snapped: 2.1 });
+  });
+
+  it("候補が無ければ素通し", () => {
+    expect(snapEdge(1.5, [], TH)).toEqual({ at: 1.5, snapped: null });
+  });
+
+  it("0 秒もスナップ点として扱える（値が 0 でも吸着する）", () => {
+    expect(snapEdge(0.04, [0, 3], TH)).toEqual({ at: 0, snapped: 0 });
   });
 });

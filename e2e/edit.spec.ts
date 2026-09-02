@@ -132,6 +132,69 @@ test("移動中に他クリップの端へスナップし、Shift で切れる",
   await expect(page.getByTestId("log")).toContainText("snapB の開始位置: 0.00s");
 });
 
+/* #84: トリムのスナップ。移動（#66）と同じ流儀で、他クリップの端に吸着する。
+   トリムは素材の全長までしか伸ばせないので、**縮める**方向で吸着させる。 */
+
+/** 2本目を右へ 4 秒ぶん動かす（既定ズーム 70px/s）。戻り値は1本目のクリップ。 */
+async function layout(page: import("@playwright/test").Page) {
+  const second = page.getByTestId("clip").nth(1);
+  const b0 = await second.boundingBox();
+  if (!b0) throw new Error("clip not found");
+  const by = b0.y + b0.height / 2;
+  await page.mouse.move(b0.x + b0.width / 2, by);
+  await page.mouse.down();
+  await page.mouse.move(b0.x + b0.width / 2 + 280, by, { steps: 6 });
+  await page.mouse.up();
+  return { first: page.getByTestId("clip").first(), second };
+}
+
+test("右端のトリムが隣のクリップの開始位置にスナップする", async ({ page }) => {
+  /* 1本目は 0〜6秒。2本目を 4秒 に置き、そこをスナップ点にする。 */
+  await load(page, [makeTone("snapA.wav", 440, 6), makeTone("snapB.wav", 330, 2)]);
+  const { first, second } = await layout(page);
+
+  /* 1本目の右端（6秒）を 4秒 の少し手前まで縮める。ぴったり 140px 縮めると
+     目分量でも一致してしまうので、4px 足りない位置で離す。 */
+  const a0 = await first.boundingBox();
+  if (!a0) throw new Error("clip not found");
+  const ay = a0.y + a0.height / 2;
+  await page.mouse.move(a0.x + a0.width - 4, ay);
+  await page.mouse.down();
+  await page.mouse.move(a0.x + a0.width - 4 - 136, ay, { steps: 6 });
+  /* 吸着中は枠色が変わる（移動と同じ .snapped）。 */
+  await expect(first).toHaveClass(/snapped/);
+  await page.mouse.up();
+
+  /* 4秒ちょうどで止まっていれば、2本目の開始と隙間なく繋がっている。 */
+  const a1 = await first.boundingBox();
+  const b1 = await second.boundingBox();
+  if (!a1 || !b1) throw new Error("clip not found");
+  expect(Math.abs(a1.x + a1.width - b1.x)).toBeLessThan(1);
+});
+
+test("Shift ドラッグならトリムは吸着しない", async ({ page }) => {
+  await load(page, [makeTone("nosnapA.wav", 440, 6), makeTone("nosnapB.wav", 330, 2)]);
+  const { first, second } = await layout(page);
+
+  const a0 = await first.boundingBox();
+  if (!a0) throw new Error("clip not found");
+  const ay = a0.y + a0.height / 2;
+  await page.keyboard.down("Shift");
+  await page.mouse.move(a0.x + a0.width - 4, ay);
+  await page.mouse.down();
+  await page.mouse.move(a0.x + a0.width - 4 - 136, ay, { steps: 6 });
+  await expect(first).not.toHaveClass(/snapped/);
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+
+  /* 吸着しないので、離した位置のまま（このドラッグ量では 4px 行き過ぎて重なる）。
+     符号は問わず「隣の端に揃っていない」ことを見る。 */
+  const a1 = await first.boundingBox();
+  const b1 = await second.boundingBox();
+  if (!a1 || !b1) throw new Error("clip not found");
+  expect(Math.abs(b1.x - (a1.x + a1.width))).toBeGreaterThan(1);
+});
+
 /* #77: トラックの複製。設定ごと写り、複製側が選択される。 */
 test("選択したトラックを Ctrl+D で複製できる", async ({ page }) => {
   await load(page, [makeTone("dup.wav", 440, 2)]);
