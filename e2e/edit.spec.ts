@@ -88,3 +88,46 @@ test("フェードアウトが書き出しに効く", async ({ page }) => {
   expect(head).toBeGreaterThan(3000);
   expect(tail).toBeLessThan(head * 0.5);
 });
+
+/* #66: クリップ移動のスナップ。既定ズーム 70px/s・しきい値 8px（約0.11s）。 */
+test("移動中に他クリップの端へスナップし、Shift で切れる", async ({ page }) => {
+  /* a は 2 秒。b(1秒) を a の終端（2.00s）の少し手前までドラッグする。 */
+  await load(page, [makeTone("snapA.wav", 440, 2), makeTone("snapB.wav", 330, 1)]);
+  const clipB = page.getByTestId("clip").nth(1);
+  const box = await clipB.boundingBox();
+  if (!box) throw new Error("clip not found");
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+
+  /* +136px（= 1.94s 相当）。しきい値内なので 2.00s に吸着し、枠色が変わる。 */
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 136, cy, { steps: 5 });
+  await expect(clipB).toHaveClass(/snapped/);
+  await page.mouse.up();
+  await expect(clipB).not.toHaveClass(/snapped/);
+  await expect(page.getByTestId("log")).toContainText("snapB の開始位置: 2.00s");
+
+  /* Shift ドラッグはスナップしない: 2.00s から +5px（≒0.07s）動かすと端数のまま。 */
+  const moved = await clipB.boundingBox();
+  if (!moved) throw new Error("clip not found");
+  const mx = moved.x + moved.width / 2;
+  await page.keyboard.down("Shift");
+  await page.mouse.move(mx, cy);
+  await page.mouse.down();
+  await page.mouse.move(mx + 5, cy, { steps: 2 });
+  await expect(clipB).not.toHaveClass(/snapped/);
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  await expect(page.getByTestId("log")).toContainText("snapB の開始位置: 2.07s");
+
+  /* 0 秒にも吸着する: 先頭付近まで戻すとぴったり 0.00s。 */
+  const back = await clipB.boundingBox();
+  if (!back) throw new Error("clip not found");
+  const bx = back.x + back.width / 2;
+  await page.mouse.move(bx, cy);
+  await page.mouse.down();
+  await page.mouse.move(bx - Math.round(2.07 * 70) + 4, cy, { steps: 5 });
+  await page.mouse.up();
+  await expect(page.getByTestId("log")).toContainText("snapB の開始位置: 0.00s");
+});

@@ -53,8 +53,9 @@ Playwright で実際に音声を読ませて確認した範囲。**憶測では�
 
 1. ~~**ビルド構成を決めて移す。**~~ → Vite + TS + React + oxlint + pnpm。「決めたこと」参照。
 2. ~~**テストを置く。**~~ → vitest（`src/lib/` の純粋関数3つ）と Playwright（読み込み／再生／停止／書き出し／削除）。`.github/workflows/ci.yml` で lint → typecheck → unit → E2E を回す。E2E のテスト音源は `src/lib/wav.ts` でその場生成しているので、権利のあるファイルはリポジトリに入らない。
-3. ~~**GitHub Pages へのデプロイ。**~~ → #5。main への push で公開される。`vite.config.ts` の `base: "./"` のままなので、後から Cloudflare Worker 経由で smashcat.dev 配下に載せ替えることもできる。
-4. ~~**v0 由来のバグ4件。**~~ → #1（長尺・高ズームで canvas が一辺上限 65535px を超えて白紙になる）、#2（`formatTime` が分境界で `00:60.00` を返す）、#3（テーマ切り替えでルーラーが再描画されない）、#4（`bounce()` が失敗すると書き出しボタンが永久に無効化される）。**どれも「例外が出ないまま壊れる」型**だったので、同種を見つけたら同じ粒度で Issue にすること。
+3. ~~**GitHub Pages へのデプロイ。**~~ → #5。main への push で公開される。`vite.config.ts` の `base: "./"` のまま。
+4. ~~**smashcat.dev 配下への載せ替え。**~~ → #62。**実体は GitHub Pages のまま**、`Naturalclar/smashcat.dev` の Cloudflare Worker が `/prism-river/*` をプロキシする（medley-generator と同じ構成。avvy-deco だけが Vercel なのは Next.js だから）。**prism-river 側のコード変更はゼロ**で、Worker の `PROXY_TARGETS` に1件足しただけ。`base: "./"` は相対のままでよく、Worker の `normalizeTrailingSlash` が末尾スラッシュを保証している——**base を絶対パスに変えるなら Worker 側も対で変える**（片方だけだと 404）。将来 WASM スレッドで COOP/COEP が要るときも、Pages ではヘッダを付けられないので Worker の `proxy()` で足す。
+5. ~~**v0 由来のバグ4件。**~~ → #1（長尺・高ズームで canvas が一辺上限 65535px を超えて白紙になる）、#2（`formatTime` が分境界で `00:60.00` を返す）、#3（テーマ切り替えでルーラーが再描画されない）、#4（`bounce()` が失敗すると書き出しボタンが永久に無効化される）。**どれも「例外が出ないまま壊れる」型**だったので、同種を見つけたら同じ粒度で Issue にすること。
 
 ## 進め方 — まず Issue 化してから着手する
 

@@ -20,6 +20,7 @@ import {
 } from "../lib/pianoroll";
 import { MP3_KBPS } from "../lib/mp3";
 import { computePeaks, type Peaks } from "../lib/peaks";
+import { SNAP_PX, snapOffset } from "../lib/snap";
 import { BUS_IDS, type BusId, type BusVols, type ProjectMeta } from "../lib/store";
 import { clamp } from "../lib/time";
 import { trimEndTo, trimStartTo } from "../lib/trim";
@@ -28,6 +29,8 @@ import { deliverBlob, deliverWav, recordToWebm, renderMix, webmSupported } from 
 import { EQ_HIGH_HZ, EQ_LOW_HZ, EQ_MID_HZ, makeBiquad, rms, scheduleFades } from "./graph";
 import { renderDrums } from "./drums";
 import { renderMidi } from "./midi";
+import { decodeMidiRec, encodeMidiRec, songFromEvents } from "../lib/midirec";
+import { openMidiIn, type MidiInSession } from "./midiin";
 import { projectMetaOf } from "./project";
 import { collectRecording, openMic, type RecSession } from "./recorder";
 import {
@@ -74,6 +77,14 @@ function isRollFile(f: { name: string }): boolean {
   return ROLL_EXT.test(f.name);
 }
 
+/* MIDI 実機入力で録ったトラックの目印（#56）。元ファイルが無いので、
+   srcBytes には受信したノート列の JSON が入っている。 */
+const MIDIREC_EXT = /\.midirec\.json$/i;
+
+function isMidiRecFile(f: { name: string }): boolean {
+  return MIDIREC_EXT.test(f.name);
+}
+
 /** エラー文言の分岐用。音声の取り込みか、動画からの音声取り出しか。 */
 function isVideoFile(f: File): boolean {
   return f.type.startsWith("video/") || VIDEO_EXT.test(f.name);
@@ -113,6 +124,9 @@ export class Engine {
   private recCount = 0;
   /** 録音を始めたタイムライン上の位置（秒）。トラック化のとき offset に入れる（#64）。 */
   private recAt = 0;
+  /** MIDI 実機入力のセッション（#56）。マイク録音とは独立に持つ。 */
+  private midiIn: MidiInSession | null = null;
+  private midiRecCount = 0;
   private pxPerSec = 70;
   private playing = false;
   private looping = false;
@@ -219,6 +233,7 @@ export class Engine {
       bouncing: this.bouncing,
       exporting: this.exporting,
       recording: this.rec !== null,
+      midiRecording: this.midiIn !== null,
       webmBusy: this.webmBusy,
       mp3Busy: this.mp3Busy,
     };
@@ -611,13 +626,18 @@ export class Engine {
       const roll = isRollFile({ name: m.srcName })
         ? decodeRoll(new TextDecoder().decode(bytes))
         : null;
+      const midirec = isMidiRecFile({ name: m.srcName })
+        ? decodeMidiRec(new TextDecoder().decode(bytes))
+        : null;
       const decoding = drums
         ? renderDrums(drums, ctx.sampleRate).then((r) => r.buf)
         : roll
           ? renderMidi(toMidiSong(roll), ctx.sampleRate).then((r) => r.buf)
-          : isMidiFile({ name: m.srcName })
-            ? this.renderMidiChannel(ctx, bytes, m.midiChannel)
-            : ctx.decodeAudioData(bytes);
+          : midirec
+            ? renderMidi(midirec, ctx.sampleRate).then((r) => r.buf)
+            : isMidiFile({ name: m.srcName })
+              ? this.renderMidiChannel(ctx, bytes, m.midiChannel)
+              : ctx.decodeAudioData(bytes);
       // oxlint-disable-next-line no-await-in-loop
       const buf = await decoding;
       const ms = performance.now() - t0;
@@ -924,6 +944,76 @@ export class Engine {
     this.recRaf = requestAnimationFrame(this.recTick);
   };
 
+  /* ── MIDI 入力（#56） ──────────────────────────────────────────────── */
+
+  /**
+   * MIDI 録音ボタンから。開始はユーザー操作起点で呼ぶこと（権限プロンプトの
+   * 都合、マイクと同じ）。録れるのは音声ではなくノート列なので、停止時に
+   * 内蔵シンセ（読み込んだ MIDI と同じ）でレンダーしてトラックにする。
+   */
+  toggleMidiRecord(): void {
+    if (this.midiIn) {
+      void this.finishMidiRecord();
+      return;
+    }
+    void this.startMidiRecord();
+  }
+
+  private async startMidiRecord(): Promise<void> {
+    if (this.midiIn) return;
+    const res = await openMidiIn((e) => {
+      /* 無反応のまま録れていない、が一番困るので受けた音数を都度出す。 */
+      if (e.kind !== "on" || !this.midiIn) return;
+      const n = this.midiIn.events.filter((x) => x.kind === "on").length;
+      this.say(`MIDI 録音中 … 受信 ${n}音。もう一度 ♪ を押すと停止してトラックになります。`);
+    });
+    if ("error" in res) {
+      this.say(res.error);
+      return;
+    }
+    this.midiIn = res.midi;
+    const names = res.midi.inputs.map((i) => i.name || "不明なデバイス").join(" / ");
+    this.say(`MIDI 録音中（入力: ${names}）… 弾いてください。もう一度 ♪ を押すと停止します。`);
+  }
+
+  /** 停止 → ノート化 → 内蔵シンセでレンダー → トラック化。 */
+  private async finishMidiRecord(): Promise<void> {
+    const session = this.midiIn;
+    if (!session) return;
+    this.midiIn = null;
+    session.close();
+    /* 停止時刻は開始と同じ performance.now() の時間軸で取る（midiin.ts 参照）。 */
+    const endSec = Math.max(0, (performance.now() - session.t0) / 1000);
+    const song = songFromEvents(session.events, endSec);
+    if (!song) {
+      this.say("MIDI 録音を停止しました。ノートを受信していないので、トラックは作りません。");
+      return;
+    }
+    const ctx = this.audio();
+    if (ctx.state === "suspended") await ctx.resume();
+    this.say(`MIDI 録音をレンダー中（${song.notes.length}音）…`);
+    const r = await renderMidi(song, ctx.sampleRate);
+    this.decodeTotal += r.ms;
+    const name = `MIDI 録音 ${++this.midiRecCount}`;
+    /* 元ファイルが無い生成トラックなので、srcBytes はノート列の JSON
+       （ドラム / ピアノロールと同じ形）。保存（#18）はこれをそのまま書く。 */
+    this.push(
+      name,
+      `${name}.midirec.json`,
+      new Blob([encodeMidiRec(song)], { type: "application/json" }),
+      r.buf,
+      r.ms,
+    );
+    this.rebuildIfPlaying();
+    this.refreshTelemetry();
+    this.say(
+      `${name} — ${song.notes.length}音 / ${song.durationSec.toFixed(2)}s / 内蔵シンセで ${r.ms.toFixed(0)}ms でレンダー` +
+        (r.skipped
+          ? `。うち ${r.skipped}音は対応する音色が無いので鳴らしていません（タム・シンバル類）`
+          : ""),
+    );
+  }
+
   /* ── グループバス ──────────────────────────────────────────────────── */
 
   /** トラックの出口（pan）を、割り当てに従ってバスか Master に繋ぎ直す。 */
@@ -1014,10 +1104,29 @@ export class Engine {
 
   /* ── クリップの移動 ────────────────────────────────────────────────── */
 
-  /** ドラッグ中に呼ぶ。DOM は呼び出し側が直に動かすので、ここでは再描画しない。 */
-  nudgeOffset(id: string, offset: number): void {
+  /**
+   * ドラッグ中に呼ぶ。スナップ後の値を返すので、呼び出し側はそれで DOM を
+   * 直に動かす（trimTo と同じ形。再描画はしない）。`snap: false`
+   * （Shift ドラッグ）で素通しになる。
+   */
+  nudgeOffset(id: string, offset: number, snap = true): { offset: number; snapped: boolean } | null {
     const t = this.find(id);
-    if (t) t.offset = Math.max(0, offset);
+    if (!t) return null;
+    const raw = Math.max(0, offset);
+    if (!snap) {
+      t.offset = raw;
+      return { offset: raw, snapped: false };
+    }
+    /* スナップ点: 0 秒と、他トラックのクリップの開始・終端（実効長）。 */
+    const targets = [0];
+    for (const x of this.tracks) {
+      if (x === t) continue;
+      targets.push(x.offset, x.offset + (x.trimEnd - x.trimStart));
+    }
+    /* しきい値はピクセルで持つ。ズームインするほど精密になる。 */
+    const r = snapOffset(raw, t.trimEnd - t.trimStart, targets, SNAP_PX / this.pxPerSec);
+    t.offset = r.offset;
+    return { offset: r.offset, snapped: r.snapped !== null };
   }
 
   /** ドラッグを離したときに呼ぶ。ここで初めて React と再生を組み直す。 */
