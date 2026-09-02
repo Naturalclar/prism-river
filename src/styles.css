@@ -183,6 +183,8 @@ input[type=range]::-moz-range-thumb{
 }
 .clip.dragging{cursor:grabbing; box-shadow:0 0 0 2px var(--accent)}
 .clip.selected{box-shadow:0 0 0 2px var(--accent)}
+/* スナップ点に吸着中（#66）。dragging より後ろに置いて枠色で上書きする。 */
+.clip.snapped{box-shadow:0 0 0 2px var(--good)}
 .clip .wave{position:absolute; inset:0; display:flex; pointer-events:none}
 .clip canvas{display:block}
 .clip .grip{position:absolute; top:0; bottom:0; width:8px; cursor:ew-resize; z-index:2}
