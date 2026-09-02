@@ -94,3 +94,35 @@ test("保存してリロードするとパターンごと復元される", async
   await expect(page.getByTestId("drum-kick-5")).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByTestId("drum-kick-0")).toHaveAttribute("aria-pressed", "false");
 });
+
+test("ドラムが2本あるとき、選択を変えると格子もそのトラックに切り替わる（#76）", async ({ page }) => {
+  await page.getByRole("button", { name: "ドラムを追加" }).click();
+  await page.getByRole("button", { name: "ドラムを追加" }).click();
+  await expect(page.getByTestId("track-head")).toHaveCount(2);
+  const heads = page.getByTestId("track-head");
+  const title = page.getByTestId("drumpanel").locator(".fx-top b");
+
+  /* 追加直後は新しい方（ドラム 2）が開いていて、選択もそこにある。 */
+  await expect(title).toHaveText("ドラム 2");
+  await expect(heads.nth(1)).toHaveClass(/selected/);
+  /* ドラム 2 だけ 6ステップ目に1発。ドラム 1 は四つ打ちのまま。 */
+  await onlyKickAt(page, 5);
+
+  /* ラックでドラム 1 を選ぶと、格子はドラム 1 のもの（四つ打ち）になる。 */
+  await heads.nth(0).locator(".head-name").click();
+  await expect(title).toHaveText("ドラム 1");
+  await expect(page.getByTestId("drum-kick-0")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("drum-kick-5")).toHaveAttribute("aria-pressed", "false");
+
+  /* 戻すと、さっき置いた1発だけが残っている。 */
+  await heads.nth(1).locator(".head-name").click();
+  await expect(title).toHaveText("ドラム 2");
+  await expect(page.getByTestId("drum-kick-5")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("drum-kick-0")).toHaveAttribute("aria-pressed", "false");
+
+  /* 逆方向: D ボタンで開き直したトラックが選択になる。 */
+  await heads.nth(0).getByRole("button", { name: /のドラム$/ }).click();
+  await expect(title).toHaveText("ドラム 1");
+  await expect(heads.nth(0)).toHaveClass(/selected/);
+  await expect(heads.nth(1)).not.toHaveClass(/selected/);
+});

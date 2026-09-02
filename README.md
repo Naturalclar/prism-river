@@ -10,6 +10,8 @@
 
 公開先は **https://smashcat.dev/prism-river** 。[`Naturalclar/smashcat.dev`](https://github.com/Naturalclar/smashcat.dev) が Cloudflare Worker としてホスト名を持ち、`/prism-river/*` を GitHub Pages へプロキシしている（`/medley-generator` と同じ構成）。**実体は GitHub Pages のまま**で、`main` への push で更新される（`.github/workflows/ci.yml` の `deploy` ジョブ）。`naturalclar.github.io/prism-river/` でも同じものが開くが、**人に渡すのは smashcat.dev 側**。
 
+SNS に貼ったときのカード（OGP）は `index.html` のメタタグと `public/ogp.png`。画像は `pnpm ogp` で生成する（`scripts/ogp/`。テンプレート HTML を Playwright で 1200×630 撮影するだけで、外部の画像素材は持ち込まない）。**`og:url` / `og:image` / canonical は絶対 URL でハードコード**してある——SNS のクローラは相対パスを辿らないため。公開先を変えるときはここも手で直す。
+
 `vite.config.ts` の `base` を `'./'`（相対）にしてあるのは、この載せ替えのため。接頭辞を埋め込まない代わりに**末尾スラッシュが必須**で、Worker 側の `normalizeTrailingSlash` が `/prism-river` を `/prism-river/` に寄せている。base を絶対パスに変えるときは Worker の設定も対で変える。
 
 ## 使う
@@ -31,6 +33,8 @@ pnpm dev
 | エフェクト | ヘッダの `FX` → EQ 3バンドとコンプレッサー |
 | グループバス | ヘッダの 弦 / 管 / 鍵盤 で割り当て。バス音量は Deck の `Bus` |
 | トラックの選択 / 削除 | クリップかヘッダをクリック → `Delete` |
+| トラックの複製 | 選択して `Ctrl+D` / `Cmd+D`。音量・トリム・FX・バスごと複製される |
+| 右クリックメニュー | クリップかヘッダを右クリック → 複製 / 削除 |
 | 音量 / パン / ソロ / ミュート | 左のトラックヘッダ |
 | マイク録音 | トランスポートの ●。録音中は録れている範囲が破線のクリップで伸びる。もう一度押すと停止してトラックになる |
 | MIDI キーボードで録る | トランスポートの ♪。弾いたノートを停止時に内蔵シンセでレンダーしてトラックにする（Web MIDI 対応ブラウザのみ） |
@@ -52,7 +56,7 @@ pnpm dev
 - フェードイン / アウト（上端の丸ハンドル。`GainNode` の `linearRampToValueAtTime`）
 - トラックごとの EQ 3バンド（`BiquadFilterNode` の低棚 200Hz / ピーキング 1kHz / 高棚 4kHz）とコンプ（`DynamicsCompressorNode`）。再生中はライブに効き、書き出しにも同じ設定が乗る
 - グループバス3系統（弦=ルナサ / 管=メルラン / 鍵盤=リリカ）。トラックを `pan → busGain → master` でサブミックスにまとめ、バス音量が再生・書き出しの両方に効く。割り当てはトグルで、外すと Master 直結に戻る
-- トラックのクリック選択と `Delete` キーでの削除
+- トラックのクリック選択と `Delete` キーでの削除、`Ctrl+D` / `Cmd+D` での複製（設定ごと写る。AudioBuffer と元ファイルは参照共有なので PCM メモリは増えない。ドラム / ロールのパターンはディープコピーで独立に編集できる）
 - マイク録音（`getUserMedia` + `MediaRecorder`。停止すると録った音声がそのままトラックになり、**録り始めたタイムライン上の位置に置かれる**（再生に重ねて録れる）。録音中はレベルメーターに入力レベルが重なるので無音録りに気づける。録った音声も他のトラック同様、端末から出ない）
 - 録音中のリアルタイム表示（#63）。停止してデコードが終わるまでトラックは現れないので、そのあいだ**録れている範囲を仮のクリップとして録り始めた位置から伸ばす**（破線の枠が「まだ確定していない」印）。**波形として正確なものではない** — 値は `AnalyserNode` をフレームごとに読んだピークで、フレーム間（約16ms）の瞬間的なピークは取りこぼす。狙いは「いま、どこに、鳴っている音が録れているか」が分かることで、正確な波形は停止後のデコードで出るものに丸ごと差し替わる
 - MIDI キーボードからの録音（#56 段1）。`navigator.requestMIDIAccess` で note on/off を受け、停止すると読み込んだ MIDI と同じ内蔵シンセでレンダーしてトラックにする。録れるのは音声ではなくノート列なので容量はほぼゼロで、保存・復元はノート列の JSON から再レンダーする。録音中は受信した音数がログに出る（無音録りならぬ「無反応録り」に気づける）。**弾いている音をその場で聴くリアルタイム発音は未実装**（下の「これから」）
@@ -177,6 +181,7 @@ Vite + TypeScript + React + oxlint + pnpm。
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm test` | vitest（ピーク計算・WAV エンコード・時間変換・トリム・フェードの単体テスト） |
 | `pnpm test:e2e` | Playwright（読み込み〜再生〜書き出しの通し） |
+| `pnpm ogp` | OGP 画像（`public/ogp.png`）を生成し直す。文言や配色を変えたときに叩く |
 | `pnpm measure:long` | 長尺・複数トラックの実測（#21）。`pnpm build` してプレビューを立てた状態で実行する。`MEASURE_MINUTES` / `MEASURE_TRACKS` で組み合わせを上書きできる |
 
 ### 作りの前提

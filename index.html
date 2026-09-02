@@ -4,7 +4,34 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Prism River</title>
-    <meta name="description" content="ブラウザだけで完結するマルチトラック音声エディタ。音声は端末から出ません。">
+    <meta name="description" content="ブラウザだけで完結するマルチトラック音声エディタ。">
+
+    <!--
+      OGP と canonical（#69）。
+
+      同じ内容が smashcat.dev/prism-river/ と naturalclar.github.io/prism-river/ の
+      両方から見えるので、canonical で smashcat.dev を正規と明示する。
+
+      **og:url と og:image は絶対 URL でハードコードする。** SNS のクローラは
+      相対パスを辿らないため。vite.config.ts の base は './'（相対）なので、
+      ここだけ流儀が違う——base を変えても OGP は追随しないので、公開先を
+      変えるときはこの2つも手で直すこと。
+
+      画像は `pnpm ogp` で生成して public/ogp.png にコミットしてある
+      （scripts/ogp/）。文言を変えたら撮り直す。
+    -->
+    <link rel="canonical" href="https://smashcat.dev/prism-river/">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://smashcat.dev/prism-river/">
+    <meta property="og:title" content="Prism River">
+    <meta property="og:description" content="ブラウザだけで完結するマルチトラック音声エディタ。">
+    <meta property="og:image" content="https://smashcat.dev/prism-river/ogp.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="Prism River — ブラウザだけで完結するマルチトラック音声エディタ">
+    <meta property="og:site_name" content="Prism River">
+    <meta property="og:locale" content="ja_JP">
+    <meta name="twitter:card" content="summary_large_image">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">

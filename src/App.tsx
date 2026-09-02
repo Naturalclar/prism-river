@@ -12,6 +12,7 @@ import { DrumPanel } from "./components/DrumPanel";
 import { RollPanel } from "./components/RollPanel";
 import { FxPanel } from "./components/FxPanel";
 import { Probe } from "./components/Probe";
+import { ContextMenu, type MenuAt } from "./components/ContextMenu";
 import { Reel } from "./components/Reel";
 import { TrackHead } from "./components/TrackHead";
 import {
@@ -45,6 +46,8 @@ export default function App() {
   const autoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /* 自動保存の失敗を伝えるのは一度だけ。毎回出すとログが埋まる。 */
   const autoFailed = useRef(false);
+  /* 右クリックメニュー（#78）。表示だけの状態なのでここに置く。 */
+  const [menu, setMenu] = useState<MenuAt | null>(null);
 
   /* 起動時に保存データがあれば、そのまま復元して前回の続きから始める（#80）。
      「提案して待つ」をやめたのは、押しそびれたときに戻す手立てが無かったため
@@ -200,6 +203,13 @@ export default function App() {
         engine.removeSelected();
         return;
       }
+      /* Ctrl+D / Cmd+D で選択中トラックの複製（#77）。preventDefault で
+         ブラウザのブックマーク登録を抑止する。 */
+      if ((e.ctrlKey || e.metaKey) && e.code === "KeyD") {
+        e.preventDefault();
+        engine.duplicateSelected();
+        return;
+      }
       if (e.code !== "Space") return;
       e.preventDefault();
       engine.toggle();
@@ -228,6 +238,17 @@ export default function App() {
 
       <div
         className={`stage${armed ? " armed" : ""}`}
+        onContextMenu={(e) => {
+          /* クリップ / ヘッダ（data-track-id 持ち）の上でだけ自前メニューを出す。
+             委譲にしてあるのは、Reel → Clip とプロップを掘らないため。 */
+          const hit = (e.target as Element).closest?.("[data-track-id]");
+          if (!hit) return;
+          e.preventDefault();
+          const id = hit.getAttribute("data-track-id");
+          if (!id) return;
+          engine.select(id);
+          setMenu({ x: e.clientX, y: e.clientY, id });
+        }}
         onDragEnter={(e) => {
           e.preventDefault();
           if (++depth.current === 1) setArmed(true);
@@ -272,6 +293,7 @@ export default function App() {
       <FxPanel snap={snap} />
       <DrumPanel snap={snap} />
       <RollPanel snap={snap} />
+      {menu && <ContextMenu at={menu} onClose={() => setMenu(null)} />}
       <Probe snap={snap} />
     </>
   );

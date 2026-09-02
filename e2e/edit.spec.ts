@@ -131,3 +131,92 @@ test("移動中に他クリップの端へスナップし、Shift で切れる",
   await page.mouse.up();
   await expect(page.getByTestId("log")).toContainText("snapB の開始位置: 0.00s");
 });
+
+/* #77: トラックの複製。設定ごと写り、複製側が選択される。 */
+test("選択したトラックを Ctrl+D で複製できる", async ({ page }) => {
+  await load(page, [makeTone("dup.wav", 440, 2)]);
+
+  /* 音量を 50 に変えてから複製 → 複製側にも 50 が写る。 */
+  await page.getByLabel("dup の音量").evaluate((el, v) => {
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    set?.call(el, String(v));
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }, 0.5);
+  await expect(page.getByTestId("track-head").first()).toContainText("50");
+
+  await page.getByTestId("clip").click();
+  await page.keyboard.press("Control+d");
+  await expect(page.getByTestId("track-head")).toHaveCount(2);
+  await expect(page.getByTestId("track-head").nth(1)).toContainText("dup のコピー");
+  await expect(page.getByTestId("track-head").nth(1)).toContainText("50");
+  /* 複製側が選択されている。 */
+  await expect(page.getByTestId("clip").nth(1)).toHaveClass(/selected/);
+
+  /* 選択を外すと Ctrl+D は何もしない。 */
+  await page.getByTestId("clip").nth(1).click();
+  await expect(page.getByTestId("clip").nth(1)).not.toHaveClass(/selected/);
+  await page.keyboard.press("Control+d");
+  await expect(page.getByTestId("track-head")).toHaveCount(2);
+});
+
+/* パターンはディープコピー: 複製側の格子を編集しても元は変わらない。 */
+test("ドラムトラックの複製は元と独立して編集できる", async ({ page }) => {
+  await page.getByRole("button", { name: "ドラムを追加", exact: true }).click();
+  await expect(page.getByTestId("drumpanel")).toBeVisible();
+  const title = page.getByTestId("drumpanel").locator(".fx-top b");
+
+  /* 追加したトラックは選択済み（#76）。ボタンにフォーカスが残っているとキーが
+     素通りするので、何も起きない場所を押してフォーカスを外してから Ctrl+D。 */
+  await expect(page.getByTestId("clip")).toHaveClass(/selected/);
+  await page.locator(".rack-top").click();
+  await page.keyboard.press("Control+d");
+  await expect(page.getByTestId("track-head")).toHaveCount(2);
+
+  /* 選択は複製側へ移り、開いたままのパネルも追従する（#76）。四つ打ちのキック1拍目を消す。 */
+  await expect(title).toHaveText("ドラム 1 のコピー");
+  await expect(page.getByTestId("drum-kick-0")).toHaveAttribute("aria-pressed", "true");
+  await page.getByTestId("drum-kick-0").click();
+  await expect(page.getByTestId("drum-kick-0")).toHaveAttribute("aria-pressed", "false");
+
+  /* 元トラックのパネルに切り替えると、キック1拍目は残っている。 */
+  await page.getByRole("button", { name: "ドラム 1 のドラム", exact: true }).click();
+  await expect(title).toHaveText("ドラム 1");
+  await expect(page.getByTestId("drum-kick-0")).toHaveAttribute("aria-pressed", "true");
+});
+
+/* #78: 右クリックメニュー（段1: 複製 / 削除）。 */
+test("右クリックメニューから複製と削除ができる", async ({ page }) => {
+  await load(page, [makeTone("ctx.wav", 440)]);
+
+  /* クリップの右クリック → メニューが出て、そのトラックが選択される。 */
+  await page.getByTestId("clip").click({ button: "right" });
+  await expect(page.getByTestId("ctxmenu")).toBeVisible();
+  await expect(page.getByTestId("clip")).toHaveClass(/selected/);
+
+  /* 複製 → 1本増えてメニューは閉じる。 */
+  await page.getByRole("menuitem", { name: "複製" }).click();
+  await expect(page.getByTestId("track-head")).toHaveCount(2);
+  await expect(page.getByTestId("ctxmenu")).toHaveCount(0);
+
+  /* ヘッダの右クリック → 削除で減る。 */
+  await page.getByTestId("track-head").nth(1).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "削除" }).click();
+  await expect(page.getByTestId("track-head")).toHaveCount(1);
+
+  /* Escape で閉じる。 */
+  await page.getByTestId("clip").click({ button: "right" });
+  await expect(page.getByTestId("ctxmenu")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("ctxmenu")).toHaveCount(0);
+
+  /* 外側クリックで閉じる（トラック数は変わらない）。 */
+  await page.getByTestId("clip").click({ button: "right" });
+  await expect(page.getByTestId("ctxmenu")).toBeVisible();
+  await page.locator(".rack-top").click();
+  await expect(page.getByTestId("ctxmenu")).toHaveCount(0);
+  await expect(page.getByTestId("track-head")).toHaveCount(1);
+
+  /* 何もない場所の右クリックでは自前メニューを出さない。 */
+  await page.locator(".rack-top").click({ button: "right" });
+  await expect(page.getByTestId("ctxmenu")).toHaveCount(0);
+});

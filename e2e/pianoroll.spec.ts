@@ -93,3 +93,55 @@ test("保存してリロードするとノートごと復元される", async ({
   await expect(page.getByTestId("roll-60-5")).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByTestId("roll-60-0")).toHaveAttribute("aria-pressed", "false");
 });
+
+test("打ち込みが2本あるとき、選択を変えるとロールもそのトラックに切り替わる（#76）", async ({ page }) => {
+  /* ロールは画面下に固定で幅いっぱいに出るので、既定の 720px だと2本目のヘッドを覆う。
+     ラックのヘッドを押せるよう縦を広げておく。 */
+  await page.setViewportSize({ width: 1280, height: 1100 });
+  await page.getByRole("button", { name: "打ち込みを追加" }).click();
+  await page.getByRole("button", { name: "打ち込みを追加" }).click();
+  await expect(page.getByTestId("track-head")).toHaveCount(2);
+  const heads = page.getByTestId("track-head");
+  const title = page.getByTestId("rollpanel").locator(".fx-top b");
+
+  /* 追加直後は新しい方（打ち込み 2）が開いていて、選択もそこにある。 */
+  await expect(title).toHaveText("打ち込み 2");
+  await expect(heads.nth(1)).toHaveClass(/selected/);
+  /* 打ち込み 2 にだけ C4 を1つ置く。 */
+  await putC4(page, 5);
+
+  /* ラックで打ち込み 1 を選ぶと、ロールは空の打ち込み 1 になる。 */
+  await heads.nth(0).locator(".head-name").click();
+  await expect(title).toHaveText("打ち込み 1");
+  await expect(page.getByTestId("roll-60-5")).toHaveAttribute("aria-pressed", "false");
+
+  /* 戻すと、さっき置いた1音が残っている。 */
+  await heads.nth(1).locator(".head-name").click();
+  await expect(title).toHaveText("打ち込み 2");
+  await expect(page.getByTestId("roll-60-5")).toHaveAttribute("aria-pressed", "true");
+
+  /* 逆方向: R ボタンで開き直したトラックが選択になる。 */
+  await heads.nth(0).getByRole("button", { name: /のロール$/ }).click();
+  await expect(title).toHaveText("打ち込み 1");
+  await expect(heads.nth(0)).toHaveClass(/selected/);
+  await expect(heads.nth(1)).not.toHaveClass(/selected/);
+});
+
+/* #71: 音色ボタンは .tog（幅22px・1〜2文字想定）の流用で、「オルガン」等の
+   複数文字ラベルが1文字ずつ折り返して縦にはみ出していた。折り返すと
+   scrollHeight が1行ぶんを超えるので、機械的に検知できる。 */
+test("音色・長さのボタンはラベルが1行に収まる", async ({ page }) => {
+  await page.getByRole("button", { name: "打ち込みを追加", exact: true }).click();
+  await expect(page.getByTestId("rollpanel")).toBeVisible();
+  const overflowing = await Promise.all(
+    ["roll-tone-16", "roll-tone-0", "roll-len-8"].map(async (id) => {
+      const fits = await page
+        .getByTestId(id)
+        .evaluate(
+          (el) => el.scrollHeight <= el.clientHeight + 1 && el.scrollWidth <= el.clientWidth + 1,
+        );
+      return fits ? null : id;
+    }),
+  );
+  expect(overflowing.filter(Boolean)).toEqual([]);
+});

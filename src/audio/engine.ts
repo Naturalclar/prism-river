@@ -542,12 +542,73 @@ export class Engine {
   select(id: string | null): void {
     if (this.selectedId === id) return;
     this.selectedId = id;
+    this.followSelection();
     this.emit();
+  }
+
+  /**
+   * 開いているパネル（FX / ドラム格子 / ロール）を選択トラックへ向ける（#76 / #79）。
+   * FX は全トラック共通なのでそのまま追従し、格子は選んだのが別種のトラックなら
+   * そのまま。閉じているパネルは開かない（選択のたびに出てくると邪魔なので）。
+   */
+  private followSelection(): void {
+    const t = this.selectedId ? this.find(this.selectedId) : undefined;
+    if (!t) return;
+    if (this.fxId) this.fxId = t.id;
+    if (this.drumsId && t.drums) this.drumsId = t.id;
+    if (this.rollId && t.roll) this.rollId = t.id;
   }
 
   /** Delete キーから。選択が無ければ何もしない。 */
   removeSelected(): void {
     if (this.selectedId) this.remove(this.selectedId);
+  }
+
+  /** Ctrl+D / Cmd+D から。選択が無ければ何もしない。 */
+  duplicateSelected(): void {
+    if (this.selectedId) this.duplicate(this.selectedId);
+  }
+
+  /**
+   * トラックを複製して元の直後に挿入し、複製側を選択する（#77）。
+   * `buf` と `srcBytes` は再生・保存時に読むだけの不変データなので**参照を共有**
+   * する——コピーすると PCM がまるごと倍になるだけ（10分ステレオ1本で約202MB）。
+   * 共有のぶん、テレメトリの RAM 表示（トラックごとの合計）は実メモリより
+   * 大きく出るが、表示は現状のままにしてある。
+   */
+  duplicate(id: string): void {
+    const src = this.find(id);
+    if (!src) return;
+    const t = this.push(`${src.name} のコピー`, src.srcName, src.srcBytes, src.buf, 0);
+    /* push は末尾に足すので、元の直後へ並べ直す。 */
+    this.tracks.splice(this.tracks.indexOf(t), 1);
+    this.tracks.splice(this.tracks.indexOf(src) + 1, 0, t);
+    t.vol = src.vol;
+    t.panv = src.panv;
+    t.pan.pan.value = src.panv;
+    t.mute = src.mute;
+    /* solo は写さない（複製した瞬間に2本ソロになるのは紛らわしい）。 */
+    t.offset = src.offset;
+    t.trimStart = src.trimStart;
+    t.trimEnd = src.trimEnd;
+    t.fadeIn = src.fadeIn;
+    t.fadeOut = src.fadeOut;
+    /* fx は applyFx でデータと常設ノードの両方へ（コンプの配線込み）。 */
+    this.applyFx(t, src.fx);
+    t.bus = src.bus;
+    this.routeTrack(t);
+    t.midiChannel = src.midiChannel;
+    /* パターンはディープコピー。片方の格子の編集がもう片方に波及しない。 */
+    t.drums = src.drums ? structuredClone(src.drums) : null;
+    t.roll = src.roll ? structuredClone(src.roll) : null;
+    this.selectedId = t.id;
+    /* 開いているパネルも複製側へ向ける（#76 / #79 の規則）。 */
+    this.followSelection();
+    this.balance();
+    this.refreshTelemetry();
+    this.rebuildIfPlaying();
+    this.say(`${src.name} を複製しました。`);
+    this.touched();
   }
 
   remove(id: string): void {
@@ -751,6 +812,8 @@ export class Engine {
     );
     t.drums = pattern;
     this.drumsId = t.id;
+    /* 格子が向いている先と選択を揃える（#76）。 */
+    this.selectedId = t.id;
     this.refreshTelemetry();
     this.rebuildIfPlaying();
     this.say(`${name} を追加しました（${pattern.bpm}BPM / ${pattern.bars}小節）。`);
@@ -759,6 +822,8 @@ export class Engine {
 
   toggleDrumPanel(id: string): void {
     this.drumsId = this.drumsId === id ? null : id;
+    /* 開いた格子と選択を食い違わせない（#76）。閉じるときは選択に触らない。 */
+    if (this.drumsId) this.selectedId = id;
     this.emit();
   }
 
@@ -837,6 +902,8 @@ export class Engine {
     );
     t.roll = roll;
     this.rollId = t.id;
+    /* 格子が向いている先と選択を揃える（#76）。 */
+    this.selectedId = t.id;
     this.refreshTelemetry();
     this.rebuildIfPlaying();
     this.say(`${name} を追加しました（${roll.bpm}BPM / ${roll.bars}小節）。格子を押すと音が置けます。`);
@@ -845,6 +912,8 @@ export class Engine {
 
   toggleRollPanel(id: string): void {
     this.rollId = this.rollId === id ? null : id;
+    /* 開いたロールと選択を食い違わせない（#76）。閉じるときは選択に触らない。 */
+    if (this.rollId) this.selectedId = id;
     this.emit();
   }
 
@@ -1229,6 +1298,8 @@ export class Engine {
 
   toggleFxPanel(id: string): void {
     this.fxId = this.fxId === id ? null : id;
+    /* 開いたパネルと選択を食い違わせない（#79）。閉じるときは選択に触らない。 */
+    if (this.fxId) this.selectedId = id;
     this.emit();
   }
 
