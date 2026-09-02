@@ -525,7 +525,21 @@ export class Engine {
   select(id: string | null): void {
     if (this.selectedId === id) return;
     this.selectedId = id;
+    this.followSelection();
     this.emit();
+  }
+
+  /**
+   * 開いているパネル（FX / ドラム格子 / ロール）を選択トラックへ向ける（#76 / #79）。
+   * FX は全トラック共通なのでそのまま追従し、格子は選んだのが別種のトラックなら
+   * そのまま。閉じているパネルは開かない（選択のたびに出てくると邪魔なので）。
+   */
+  private followSelection(): void {
+    const t = this.selectedId ? this.find(this.selectedId) : undefined;
+    if (!t) return;
+    if (this.fxId) this.fxId = t.id;
+    if (this.drumsId && t.drums) this.drumsId = t.id;
+    if (this.rollId && t.roll) this.rollId = t.id;
   }
 
   /** Delete キーから。選択が無ければ何もしない。 */
@@ -571,6 +585,8 @@ export class Engine {
     t.drums = src.drums ? structuredClone(src.drums) : null;
     t.roll = src.roll ? structuredClone(src.roll) : null;
     this.selectedId = t.id;
+    /* 開いているパネルも複製側へ向ける（#76 / #79 の規則）。 */
+    this.followSelection();
     this.balance();
     this.refreshTelemetry();
     this.rebuildIfPlaying();
@@ -776,6 +792,8 @@ export class Engine {
     );
     t.drums = pattern;
     this.drumsId = t.id;
+    /* 格子が向いている先と選択を揃える（#76）。 */
+    this.selectedId = t.id;
     this.refreshTelemetry();
     this.rebuildIfPlaying();
     this.say(`${name} を追加しました（${pattern.bpm}BPM / ${pattern.bars}小節）。`);
@@ -784,6 +802,8 @@ export class Engine {
 
   toggleDrumPanel(id: string): void {
     this.drumsId = this.drumsId === id ? null : id;
+    /* 開いた格子と選択を食い違わせない（#76）。閉じるときは選択に触らない。 */
+    if (this.drumsId) this.selectedId = id;
     this.emit();
   }
 
@@ -862,6 +882,8 @@ export class Engine {
     );
     t.roll = roll;
     this.rollId = t.id;
+    /* 格子が向いている先と選択を揃える（#76）。 */
+    this.selectedId = t.id;
     this.refreshTelemetry();
     this.rebuildIfPlaying();
     this.say(`${name} を追加しました（${roll.bpm}BPM / ${roll.bars}小節）。格子を押すと音が置けます。`);
@@ -870,6 +892,8 @@ export class Engine {
 
   toggleRollPanel(id: string): void {
     this.rollId = this.rollId === id ? null : id;
+    /* 開いたロールと選択を食い違わせない（#76）。閉じるときは選択に触らない。 */
+    if (this.rollId) this.selectedId = id;
     this.emit();
   }
 
@@ -1250,6 +1274,8 @@ export class Engine {
 
   toggleFxPanel(id: string): void {
     this.fxId = this.fxId === id ? null : id;
+    /* 開いたパネルと選択を食い違わせない（#79）。閉じるときは選択に触らない。 */
+    if (this.fxId) this.selectedId = id;
     this.emit();
   }
 

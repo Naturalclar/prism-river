@@ -159,21 +159,27 @@ test("選択したトラックを Ctrl+D で複製できる", async ({ page }) =
   await expect(page.getByTestId("track-head")).toHaveCount(2);
 });
 
-/* パターンはディープコピー: 元の格子を編集しても複製側は変わらない。 */
+/* パターンはディープコピー: 複製側の格子を編集しても元は変わらない。 */
 test("ドラムトラックの複製は元と独立して編集できる", async ({ page }) => {
   await page.getByRole("button", { name: "ドラムを追加", exact: true }).click();
   await expect(page.getByTestId("drumpanel")).toBeVisible();
+  const title = page.getByTestId("drumpanel").locator(".fx-top b");
 
-  await page.getByTestId("clip").click();
+  /* 追加したトラックは選択済み（#76）。ボタンにフォーカスが残っているとキーが
+     素通りするので、何も起きない場所を押してフォーカスを外してから Ctrl+D。 */
+  await expect(page.getByTestId("clip")).toHaveClass(/selected/);
+  await page.locator(".rack-top").click();
   await page.keyboard.press("Control+d");
   await expect(page.getByTestId("track-head")).toHaveCount(2);
 
-  /* 開いたままのパネルは元トラックのもの。四つ打ちのキック1拍目を消す。 */
+  /* 選択は複製側へ移り、開いたままのパネルも追従する（#76）。四つ打ちのキック1拍目を消す。 */
+  await expect(title).toHaveText("ドラム 1 のコピー");
   await expect(page.getByTestId("drum-kick-0")).toHaveAttribute("aria-pressed", "true");
   await page.getByTestId("drum-kick-0").click();
   await expect(page.getByTestId("drum-kick-0")).toHaveAttribute("aria-pressed", "false");
 
-  /* 複製側のパネルに切り替えると、キック1拍目は残っている。 */
-  await page.getByRole("button", { name: "ドラム 1 のコピー のドラム", exact: true }).click();
+  /* 元トラックのパネルに切り替えると、キック1拍目は残っている。 */
+  await page.getByRole("button", { name: "ドラム 1 のドラム", exact: true }).click();
+  await expect(title).toHaveText("ドラム 1");
   await expect(page.getByTestId("drum-kick-0")).toHaveAttribute("aria-pressed", "true");
 });
