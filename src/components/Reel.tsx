@@ -3,6 +3,7 @@ import { engine } from "../audio/instance";
 import type { Snapshot } from "../audio/engine";
 import { Clip } from "./Clip";
 import { Needle } from "./Needle";
+import { RecClip } from "./RecClip";
 import { Ruler } from "./Ruler";
 
 export function Reel({ snap }: { snap: Snapshot }) {
@@ -50,11 +51,18 @@ export function Reel({ snap }: { snap: Snapshot }) {
             <Clip t={t} pxPerSec={snap.pxPerSec} />
           </div>
         ))}
+        {/* 録音中の仮レーン（#63）。トラックになったら消えて、本物のレーンに変わる。 */}
+        {snap.recTake && (
+          <div className="lane" data-testid="rec-lane">
+            <RecClip pxPerSec={snap.pxPerSec} />
+          </div>
+        )}
       </div>
 
       <Needle reel={reel} pxPerSec={snap.pxPerSec} visible={snap.tracks.length > 0} />
 
-      {snap.tracks.length === 0 && (
+      {/* 1本も無いところから録り始めたときは、案内より仮クリップを見せる（#63）。 */}
+      {snap.tracks.length === 0 && !snap.recTake && (
         <div className="blank">
           <strong>音声ファイルをここへドロップ</strong>
           <span>

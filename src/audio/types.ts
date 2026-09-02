@@ -136,6 +136,12 @@ export type Snapshot = {
   /** WAV / webm / MP3 のどれかが走っている。書き出しは同時に1つだけ（#51）。 */
   exporting: boolean;
   recording: boolean;
+  /**
+   * 録音中の仮クリップを出しているか（#63）。レーンの出し入れは構造の変化なので
+   * React が見るが、**中身（伸びていく幅と振幅）は DOM 直書き**で、ここには来ない。
+   * 停止後もデコードが終わるまでは true のまま——本物と差し替わるのがそのとき。
+   */
+  recTake: boolean;
   /** MIDI 実機入力の録音中（#56）。マイク録音とは独立。 */
   midiRecording: boolean;
   /** webm の実時間書き出し中。 */

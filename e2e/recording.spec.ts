@@ -1,4 +1,4 @@
-import { expect, load, makeTone, test } from "./helpers";
+import { canvasPixelSum, expect, load, makeTone, test } from "./helpers";
 
 /** マイク録音（フェイクデバイス・権限拒否）。 */
 
@@ -52,6 +52,62 @@ test("再生に重ねた録音は、録り始めた位置に置かれる", async
   await expect(page.getByTestId("log")).toContainText("位置 ");
 });
 
+/* #63: 停止するまで何がどこに録れているのか一切出なかった回帰。**停止する前に**
+   タイムライン上へ仮クリップが伸びていることを見る。 */
+test("録音中、停止する前からタイムラインに録れている範囲が出る", async ({ page }) => {
+  await page.getByRole("button", { name: "マイクから録音", exact: true }).click();
+  await expect(page.getByTestId("log")).toContainText("録音中");
+  await expect(page.getByTestId("rec-clip")).toBeVisible();
+
+  /* 実時間でしか録れないので、伸びるぶんだけ待つ。 */
+  await page.waitForTimeout(400);
+  const w1 = await page.getByTestId("rec-clip").evaluate((e) => (e as HTMLElement).offsetWidth);
+  await page.waitForTimeout(400);
+  const w2 = await page.getByTestId("rec-clip").evaluate((e) => (e as HTMLElement).offsetWidth);
+  /* 録れているぶんだけ右へ伸びる（既定ズーム 70px/s なので 400ms で約 28px）。 */
+  expect(w1).toBeGreaterThan(10);
+  expect(w2).toBeGreaterThan(w1);
+
+  /* 中央行に描画があり、そこから外れた行にも届いている＝振幅のある帯になっている
+     （フェイクマイクはトーンを流すので、無音の1px線では終わらない）。 */
+  expect(await canvasPixelSum(page, "[data-testid=rec-canvas]")).toBeGreaterThan(0);
+  expect(await canvasPixelSum(page, "[data-testid=rec-canvas]", 0.3)).toBeGreaterThan(0);
+
+  /* 停止したら本物のクリップに差し替わる。仮のものが残って二重にならない。 */
+  await page.getByRole("button", { name: "録音を停止", exact: true }).click();
+  await expect(page.getByTestId("track-head")).toHaveCount(1, { timeout: 10_000 });
+  await expect(page.getByTestId("clip")).toHaveCount(1);
+  await expect(page.getByTestId("rec-clip")).toHaveCount(0);
+});
+
+/* 仮クリップと本物が同じ位置に出ること（#63 と #64 の噛み合わせ）。ここがずれると
+   「描いていた所と違う場所にクリップが落ちる」形で目に見える。 */
+test("再生に重ねると、仮クリップは録り始めた位置から伸びる", async ({ page }) => {
+  await load(page, [makeTone("base.wav", 440, 8)]);
+  await page.getByRole("button", { name: "再生", exact: true }).click();
+  await page.waitForTimeout(1200);
+
+  await page.getByRole("button", { name: "マイクから録音", exact: true }).click();
+  await expect(page.getByTestId("rec-clip")).toBeVisible();
+  await page.waitForTimeout(500);
+  const ghostLeft = await page
+    .getByTestId("rec-clip")
+    .evaluate((e) => Number.parseFloat((e as HTMLElement).style.left) || 0);
+  expect(ghostLeft).toBeGreaterThan(35);
+
+  await page.getByRole("button", { name: "録音を停止", exact: true }).click();
+  await expect(page.getByTestId("track-head")).toHaveCount(2, { timeout: 10_000 });
+
+  const realLeft = await page.evaluate(
+    () =>
+      Number.parseFloat(
+        (document.querySelectorAll("[data-testid=clip]")[1] as HTMLElement).style.left,
+      ) || 0,
+  );
+  /* 同じ位置。丸めのぶんだけ許す。 */
+  expect(Math.abs(realLeft - ghostLeft)).toBeLessThan(2);
+});
+
 test("マイクの権限が拒否されたら分かるメッセージが出る", async ({ page }) => {
   await page.addInitScript(() => {
     navigator.mediaDevices.getUserMedia = () =>
@@ -63,6 +119,8 @@ test("マイクの権限が拒否されたら分かるメッセージが出る",
   /* 録音状態にはならず、ボタンは再試行できる姿のまま。 */
   await expect(page.getByRole("button", { name: "マイクから録音", exact: true })).toBeVisible();
   await expect(page.getByTestId("track-head")).toHaveCount(0);
+  /* 録音が始まっていないので、仮クリップ（#63）も出ない。 */
+  await expect(page.getByTestId("rec-clip")).toHaveCount(0);
   /* afterEach の「ページ例外ゼロ」も検証対象: reject を握り損ねると
      unhandled rejection がここで出る。 */
 });

@@ -181,6 +181,10 @@ input[type=range]::-moz-range-thumb{
   background:var(--wave-bg); border:1px solid var(--tc);
   cursor:grab; touch-action:none;
 }
+/* 録音中の仮クリップ（#63）。本物に差し替わるまでの表示なので、破線で
+   「まだ確定していない」ことを示し、掴めなくする（トリムも移動もまだ効かない）。 */
+.clip.rec{cursor:default; pointer-events:none; border-style:dashed; opacity:.85}
+.clip.rec canvas{position:absolute; left:0; top:0}
 .clip.dragging{cursor:grabbing; box-shadow:0 0 0 2px var(--accent)}
 .clip.selected{box-shadow:0 0 0 2px var(--accent)}
 /* スナップ点に吸着中（#66）。dragging より後ろに置いて枠色で上書きする。 */
