@@ -519,7 +519,20 @@ export class Engine {
   select(id: string | null): void {
     if (this.selectedId === id) return;
     this.selectedId = id;
+    this.followSelection();
     this.emit();
+  }
+
+  /**
+   * 開いているドラム / ロールの格子を選択トラックへ向ける（#76）。
+   * 選んだのが別種のトラックなら格子はそのまま、閉じている格子は開かない
+   * （選択のたびにパネルが出てくると邪魔なので）。
+   */
+  private followSelection(): void {
+    const t = this.selectedId ? this.find(this.selectedId) : undefined;
+    if (!t) return;
+    if (this.drumsId && t.drums) this.drumsId = t.id;
+    if (this.rollId && t.roll) this.rollId = t.id;
   }
 
   /** Delete キーから。選択が無ければ何もしない。 */
@@ -725,6 +738,8 @@ export class Engine {
     );
     t.drums = pattern;
     this.drumsId = t.id;
+    /* 格子が向いている先と選択を揃える（#76）。 */
+    this.selectedId = t.id;
     this.refreshTelemetry();
     this.rebuildIfPlaying();
     this.say(`${name} を追加しました（${pattern.bpm}BPM / ${pattern.bars}小節）。`);
@@ -733,6 +748,8 @@ export class Engine {
 
   toggleDrumPanel(id: string): void {
     this.drumsId = this.drumsId === id ? null : id;
+    /* 開いた格子と選択を食い違わせない（#76）。閉じるときは選択に触らない。 */
+    if (this.drumsId) this.selectedId = id;
     this.emit();
   }
 
@@ -811,6 +828,8 @@ export class Engine {
     );
     t.roll = roll;
     this.rollId = t.id;
+    /* 格子が向いている先と選択を揃える（#76）。 */
+    this.selectedId = t.id;
     this.refreshTelemetry();
     this.rebuildIfPlaying();
     this.say(`${name} を追加しました（${roll.bpm}BPM / ${roll.bars}小節）。格子を押すと音が置けます。`);
@@ -819,6 +838,8 @@ export class Engine {
 
   toggleRollPanel(id: string): void {
     this.rollId = this.rollId === id ? null : id;
+    /* 開いたロールと選択を食い違わせない（#76）。閉じるときは選択に触らない。 */
+    if (this.rollId) this.selectedId = id;
     this.emit();
   }
 
