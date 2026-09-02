@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+    <style>
+      /* 色は src/styles.css のダークトークンと HUE（騒霊三姉妹の3色）から取る。
+         外部の画像素材は持ち込まず、波形もトラックも CSS だけで描く。 */
+      :root {
+        --bg: #12161B;
+        --panel: #191F26;
+        --lane: #1E252E;
+        --line: #2E3742;
+        --line-strong: #3E4A58;
+        --text: #E6EBF1;
+        --text-dim: #90A0B0;
+        --accent: #FF9F45;
+        --lunasa: #6E8FD4;  /* 弦 */
+        --merlin: #E8735A;  /* 管 */
+        --lyrica: #A585D6;  /* 鍵盤 */
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        width: 1200px; height: 630px; overflow: hidden;
+        background: var(--bg); color: var(--text);
+        font-family: "IBM Plex Sans", "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+        display: flex; flex-direction: column;
+      }
+      /* 上端: アプリの Deck を思わせる細い操作バー。 */
+      .deck {
+        flex: 0 0 auto; height: 76px; background: var(--panel);
+        border-bottom: 1px solid var(--line);
+        display: flex; align-items: center; gap: 18px; padding: 0 44px;
+      }
+      .brand { font-family: "IBM Plex Sans Condensed", sans-serif; font-weight: 700;
+               font-size: 26px; letter-spacing: .04em; }
+      .keys { display: flex; gap: 8px; }
+      .key { width: 30px; height: 30px; border-radius: 7px; border: 1px solid var(--line-strong);
+             display: grid; place-items: center; }
+      .key.lit { background: var(--accent); border-color: var(--accent); }
+      .key svg { width: 13px; height: 13px; }
+      .key path { fill: var(--text-dim); }
+      .key.lit path { fill: #2A1A08; }
+      .clock { margin-left: auto; font-family: "IBM Plex Mono", monospace;
+               font-size: 19px; color: var(--text-dim);
+               border: 1px solid var(--line); background: var(--lane);
+               padding: 5px 16px; border-radius: 7px; }
+
+      .body { flex: 1; display: flex; flex-direction: column; justify-content: center;
+              padding: 0 44px; gap: 34px; }
+      h1 { font-family: "IBM Plex Sans Condensed", sans-serif; font-weight: 700;
+           font-size: 92px; letter-spacing: .01em; line-height: 1; }
+      .lead { font-size: 30px; color: var(--text-dim); line-height: 1.45; }
+      .lead b { color: var(--text); font-weight: 600; }
+
+      /* トラック3本。色は弦 / 管 / 鍵盤にそのまま対応させる。 */
+      .lanes { display: flex; flex-direction: column; gap: 9px; }
+      .lane { display: flex; align-items: center; gap: 14px; }
+      .tag { width: 60px; font-family: "IBM Plex Mono", monospace; font-size: 15px;
+             color: var(--text-dim); text-align: right; }
+      .clip { flex: 1; height: 46px; background: var(--lane); border: 1px solid var(--line);
+              border-radius: 5px; position: relative; overflow: hidden; }
+      .wave { position: absolute; inset: 0; display: flex; align-items: center;
+              gap: 2px; padding: 0 8px; }
+      .wave i { flex: 1; border-radius: 1px; opacity: .85; }
+
+      .foot { flex: 0 0 auto; height: 64px; border-top: 1px solid var(--line);
+              background: var(--panel); display: flex; align-items: center;
+              gap: 30px; padding: 0 44px;
+              font-family: "IBM Plex Mono", monospace; font-size: 17px; color: var(--text-dim); }
+      .foot b { color: var(--text); font-weight: 500; }
+      .foot .url { margin-left: auto; color: var(--accent); }
+    </style>
+  </head>
+  <body>
+    <div class="deck">
+      <div class="brand">Prism River</div>
+      <div class="keys">
+        <div class="key lit"><svg viewBox="0 0 16 16"><path d="M3 2l11 6-11 6z"/></svg></div>
+        <div class="key"><svg viewBox="0 0 16 16"><path d="M3 3h10v10H3z"/></svg></div>
+        <div class="key"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="4.5" fill="#90A0B0"/></svg></div>
+      </div>
+      <div class="clock">00:03.00</div>
+    </div>
+
+    <div class="body">
+      <div>
+        <h1>Prism River</h1>
+      </div>
+      <div class="lead">
+        ブラウザだけで完結する<b>マルチトラック音声エディタ</b>。
+      </div>
+      <div class="lanes" id="lanes"></div>
+    </div>
+
+    <div class="foot">
+      <span>WAV / MP3 / webm 書き出し</span>
+      <span>MIDI・ドラム・打ち込み</span>
+      <span>EQ / コンプ / バス</span>
+      <span class="url">smashcat.dev/prism-river</span>
+    </div>
+
+    <script>
+      /* 波形は乱数ではなく決まった式で描く（同じ入力なら同じ絵が出るように）。
+         生成のたびに絵が変わると、差分がノイズになる。 */
+      /* attacks はその小節に打ち直す回数。弦は伸ばし、鍵盤は細かく刻む——
+         3本が同じ律動だと「並べて鳴らす」画に見えないので、楽器ごとに変える。 */
+      const LANES = [
+        { tag: "弦", color: "var(--lunasa)", seed: 1.7, attacks: 2, decay: 1.4 },
+        { tag: "管", color: "var(--merlin)", seed: 2.9, attacks: 3, decay: 2.6 },
+        { tag: "鍵盤", color: "var(--lyrica)", seed: 4.3, attacks: 8, decay: 4.5 },
+      ];
+      const BARS = 96;
+      const root = document.getElementById("lanes");
+      for (const l of LANES) {
+        const lane = document.createElement("div");
+        lane.className = "lane";
+        const bars = Array.from({ length: BARS }, (_, i) => {
+          /* 減衰を繰り返す包絡 × 倍音の揺らぎ。アプリのテスト音源と同じ発想。 */
+          const t = i / BARS;
+          const env = Math.exp(-l.decay * ((t * l.attacks) % 1));
+          const wob = 0.55 + 0.45 * Math.abs(Math.sin(l.seed * (i + 1) * 0.7));
+          const h = Math.max(3, env * wob * 40);
+          return `<i style="height:${h.toFixed(1)}px;background:${l.color}"></i>`;
+        }).join("");
+        lane.innerHTML =
+          `<div class="tag">${l.tag}</div>` +
+          `<div class="clip"><div class="wave">${bars}</div></div>`;
+        root.appendChild(lane);
+      }
+    </script>
+  </body>
+</html>

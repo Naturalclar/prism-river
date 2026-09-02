@@ -10,6 +10,8 @@
 
 公開先は **https://smashcat.dev/prism-river** 。[`Naturalclar/smashcat.dev`](https://github.com/Naturalclar/smashcat.dev) が Cloudflare Worker としてホスト名を持ち、`/prism-river/*` を GitHub Pages へプロキシしている（`/medley-generator` と同じ構成）。**実体は GitHub Pages のまま**で、`main` への push で更新される（`.github/workflows/ci.yml` の `deploy` ジョブ）。`naturalclar.github.io/prism-river/` でも同じものが開くが、**人に渡すのは smashcat.dev 側**。
 
+SNS に貼ったときのカード（OGP）は `index.html` のメタタグと `public/ogp.png`。画像は `pnpm ogp` で生成する（`scripts/ogp/`。テンプレート HTML を Playwright で 1200×630 撮影するだけで、外部の画像素材は持ち込まない）。**`og:url` / `og:image` / canonical は絶対 URL でハードコード**してある——SNS のクローラは相対パスを辿らないため。公開先を変えるときはここも手で直す。
+
 `vite.config.ts` の `base` を `'./'`（相対）にしてあるのは、この載せ替えのため。接頭辞を埋め込まない代わりに**末尾スラッシュが必須**で、Worker 側の `normalizeTrailingSlash` が `/prism-river` を `/prism-river/` に寄せている。base を絶対パスに変えるときは Worker の設定も対で変える。
 
 ## 使う
@@ -174,6 +176,7 @@ Vite + TypeScript + React + oxlint + pnpm。
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm test` | vitest（ピーク計算・WAV エンコード・時間変換・トリム・フェードの単体テスト） |
 | `pnpm test:e2e` | Playwright（読み込み〜再生〜書き出しの通し） |
+| `pnpm ogp` | OGP 画像（`public/ogp.png`）を生成し直す。文言や配色を変えたときに叩く |
 | `pnpm measure:long` | 長尺・複数トラックの実測（#21）。`pnpm build` してプレビューを立てた状態で実行する。`MEASURE_MINUTES` / `MEASURE_TRACKS` で組み合わせを上書きできる |
 
 ### 作りの前提
