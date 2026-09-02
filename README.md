@@ -8,6 +8,10 @@
 
 ライセンスは **GPL-3.0**（[`LICENSE`](LICENSE)）。将来 `aubio` や `Rubber Band` など GPL の音楽資産を WASM で持ち込む可能性を残すための選択（[#19](https://github.com/Naturalclar/prism-river/issues/19)）。
 
+公開先は **https://smashcat.dev/prism-river** 。[`Naturalclar/smashcat.dev`](https://github.com/Naturalclar/smashcat.dev) が Cloudflare Worker としてホスト名を持ち、`/prism-river/*` を GitHub Pages へプロキシしている（`/medley-generator` と同じ構成）。**実体は GitHub Pages のまま**で、`main` への push で更新される（`.github/workflows/ci.yml` の `deploy` ジョブ）。`naturalclar.github.io/prism-river/` でも同じものが開くが、**人に渡すのは smashcat.dev 側**。
+
+`vite.config.ts` の `base` を `'./'`（相対）にしてあるのは、この載せ替えのため。接頭辞を埋め込まない代わりに**末尾スラッシュが必須**で、Worker 側の `normalizeTrailingSlash` が `/prism-river` を `/prism-river/` に寄せている。base を絶対パスに変えるときは Worker の設定も対で変える。
+
 ## 使う
 
 ```
