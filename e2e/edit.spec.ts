@@ -131,3 +131,49 @@ test("移動中に他クリップの端へスナップし、Shift で切れる",
   await page.mouse.up();
   await expect(page.getByTestId("log")).toContainText("snapB の開始位置: 0.00s");
 });
+
+/* #77: トラックの複製。設定ごと写り、複製側が選択される。 */
+test("選択したトラックを Ctrl+D で複製できる", async ({ page }) => {
+  await load(page, [makeTone("dup.wav", 440, 2)]);
+
+  /* 音量を 50 に変えてから複製 → 複製側にも 50 が写る。 */
+  await page.getByLabel("dup の音量").evaluate((el, v) => {
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    set?.call(el, String(v));
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }, 0.5);
+  await expect(page.getByTestId("track-head").first()).toContainText("50");
+
+  await page.getByTestId("clip").click();
+  await page.keyboard.press("Control+d");
+  await expect(page.getByTestId("track-head")).toHaveCount(2);
+  await expect(page.getByTestId("track-head").nth(1)).toContainText("dup のコピー");
+  await expect(page.getByTestId("track-head").nth(1)).toContainText("50");
+  /* 複製側が選択されている。 */
+  await expect(page.getByTestId("clip").nth(1)).toHaveClass(/selected/);
+
+  /* 選択を外すと Ctrl+D は何もしない。 */
+  await page.getByTestId("clip").nth(1).click();
+  await expect(page.getByTestId("clip").nth(1)).not.toHaveClass(/selected/);
+  await page.keyboard.press("Control+d");
+  await expect(page.getByTestId("track-head")).toHaveCount(2);
+});
+
+/* パターンはディープコピー: 元の格子を編集しても複製側は変わらない。 */
+test("ドラムトラックの複製は元と独立して編集できる", async ({ page }) => {
+  await page.getByRole("button", { name: "ドラムを追加", exact: true }).click();
+  await expect(page.getByTestId("drumpanel")).toBeVisible();
+
+  await page.getByTestId("clip").click();
+  await page.keyboard.press("Control+d");
+  await expect(page.getByTestId("track-head")).toHaveCount(2);
+
+  /* 開いたままのパネルは元トラックのもの。四つ打ちのキック1拍目を消す。 */
+  await expect(page.getByTestId("drum-kick-0")).toHaveAttribute("aria-pressed", "true");
+  await page.getByTestId("drum-kick-0").click();
+  await expect(page.getByTestId("drum-kick-0")).toHaveAttribute("aria-pressed", "false");
+
+  /* 複製側のパネルに切り替えると、キック1拍目は残っている。 */
+  await page.getByRole("button", { name: "ドラム 1 のコピー のドラム", exact: true }).click();
+  await expect(page.getByTestId("drum-kick-0")).toHaveAttribute("aria-pressed", "true");
+});
