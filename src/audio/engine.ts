@@ -20,6 +20,7 @@ import {
 } from "../lib/pianoroll";
 import { MP3_KBPS } from "../lib/mp3";
 import { computePeaks, type Peaks } from "../lib/peaks";
+import { emptyTake, growTake, peakOfBytes, type RecTake } from "../lib/rectake";
 import { SNAP_PX, snapOffset } from "../lib/snap";
 import { BUS_IDS, type BusId, type BusVols, type ProjectMeta } from "../lib/store";
 import { clamp } from "../lib/time";
@@ -124,6 +125,10 @@ export class Engine {
   private recCount = 0;
   /** 録音を始めたタイムライン上の位置（秒）。トラック化のとき offset に入れる（#64）。 */
   private recAt = 0;
+  /** 録音中の仮クリップ（#63）。本物に差し替わるまでのあいだだけ持つ。 */
+  private take: RecTake | null = null;
+  /** 録り始めのオーディオ時計。仮クリップの経過はこれとの差で測る（#63）。 */
+  private recT0 = 0;
   /** MIDI 実機入力のセッション（#56）。マイク録音とは独立に持つ。 */
   private midiIn: MidiInSession | null = null;
   private midiRecCount = 0;
@@ -233,6 +238,7 @@ export class Engine {
       bouncing: this.bouncing,
       exporting: this.exporting,
       recording: this.rec !== null,
+      recTake: this.take !== null,
       midiRecording: this.midiIn !== null,
       webmBusy: this.webmBusy,
       mp3Busy: this.mp3Busy,
@@ -895,6 +901,9 @@ export class Engine {
        押した時刻を使うと許可にかかった秒数ぶん手前にクリップが落ちる。
        MediaRecorder が回り始めるのは許可のあと＝ここなので、音の中身と揃う。 */
     this.recAt = this.now();
+    /* 録れている範囲をその場で見せる（#63）。位置は録り始めた所＝本物と同じ。 */
+    this.take = emptyTake(this.recAt);
+    this.recT0 = this.audio().currentTime;
     this.recTick();
     this.say("録音中 … もう一度 ● を押すと停止してトラックになります。");
   }
@@ -907,6 +916,7 @@ export class Engine {
     cancelAnimationFrame(this.recRaf);
     const blob = collectRecording(rec);
     if (!blob.size) {
+      this.take = null;
       this.say("録音データが空でした。マイクの入力レベルを確認してください。");
       return;
     }
@@ -920,6 +930,9 @@ export class Engine {
       const name = `録音 ${++this.recCount}`;
       /* 保存（#18）用に、エンコード済みの録音チャンクを元ファイルとして持たせる。 */
       const ext = blob.type.includes("ogg") ? "ogg" : blob.type.includes("mp4") ? "m4a" : "webm";
+      /* 仮クリップ（#63）は本物を置く直前まで残す。デコード中に消すと、
+         どこに録れたのかが一瞬だけ画面から失われる。 */
+      this.take = null;
       const t = this.push(name, `${name}.${ext}`, blob, buf, ms);
       /* 録り始めた位置に置く（#64）。既定の 0 のままだと、曲の途中に重ねた
          録音が毎回 0秒 へ落ちる。組み直しの前に入れること。 */
@@ -933,16 +946,31 @@ export class Engine {
           `位置 ${this.recAt.toFixed(2)}s / デコード ${ms.toFixed(0)}ms`,
       );
     } catch {
+      /* 本物が出ないので、仮クリップも消す（残すと差し替わらないまま居座る）。 */
+      this.take = null;
       this.say("録音をデコードできませんでした（この形式はブラウザが対応していません）");
     }
   }
 
   /** 録音中は再生していなくてもメーターを動かしたいので、専用の rAF を回す。 */
   private recTick = (): void => {
-    if (!this.rec) return;
+    const rec = this.rec;
+    if (!rec) return;
+    if (this.take && this.ctx) {
+      /* 経過はオーディオ時計で測る。rAF はタブが裏に回ると間引かれるので、
+         フレーム数で数えると仮クリップだけ尺が縮む（#63）。 */
+      rec.analyser.getByteTimeDomainData(rec.buf);
+      growTake(this.take, this.ctx.currentTime - this.recT0, peakOfBytes(rec.buf));
+    }
+    /* 再生中は tick() が毎フレーム流しているので、二重に呼ばない。 */
     if (!this.playing) this.emitFrame();
     this.recRaf = requestAnimationFrame(this.recTick);
   };
+
+  /** 仮クリップの読み出し（#63）。毎フレーム変わるので React には流さない。 */
+  recTakeView(): RecTake | null {
+    return this.take;
+  }
 
   /* ── MIDI 入力（#56） ──────────────────────────────────────────────── */
 

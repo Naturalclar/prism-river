@@ -91,3 +91,22 @@ export async function tilePixelSum(page: Page, index: number): Promise<number> {
       return s;
     });
 }
+
+/**
+ * 任意の canvas について同じことをする。仮クリップ（#63）など clip 以外に使う。
+ * `atRow` は高さに対する割合（0.5＝中央行）。中央から外れた行を読むと
+ * 「線が引かれた」だけでなく「振幅のある帯が描かれた」ことまで見られる。
+ */
+export async function canvasPixelSum(page: Page, selector: string, atRow = 0.5): Promise<number> {
+  return page.locator(selector).evaluate((el, row) => {
+    const cv = el as HTMLCanvasElement;
+    if (!cv.width) return 0;
+    const g = cv.getContext("2d");
+    if (!g) return 0;
+    const y = Math.min(cv.height - 1, Math.max(0, Math.floor(cv.height * row)));
+    const d = g.getImageData(0, y, Math.min(2000, cv.width), 1).data;
+    let s = 0;
+    for (const v of d) s += v;
+    return s;
+  }, atRow);
+}
