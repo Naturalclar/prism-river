@@ -11,14 +11,20 @@ import { renderDrumHits } from "./drums";
  * そのまま効く。
  */
 
-/** GM の program（0..127）をざっくり波形に割り当てる。音色の作り込みは段2。 */
-function waveFor(program: number): OscillatorType {
+/**
+ * GM の program（0..127）をざっくり波形に割り当てる。音色の作り込みは段2。
+ * 帯は 0 始まりの GM 配列に対応（Export してあるのは境界の単体テスト用）。
+ */
+export function waveFor(program: number): OscillatorType {
   if (program <= 7) return "triangle"; /* ピアノ系 */
   if (program <= 23) return "sine"; /* クロマチックパーカッション / オルガン */
   if (program <= 39) return "sawtooth"; /* ギター / ベース */
   if (program <= 55) return "sawtooth"; /* ストリングス / アンサンブル */
-  if (program <= 79) return "square"; /* ブラス / リード / パイプ */
-  return "sine";
+  if (program <= 79) return "square"; /* ブラス / リード楽器（Reed）/ パイプ */
+  /* 80〜87 は Synth Lead。以前は下の sine に落ちていて、UI の「リード」
+     （program 80）が正弦波で鳴っていた（#70）。 */
+  if (program <= 87) return "square";
+  return "sine"; /* パッド / FX / エスニック / パーカッシブ / SE */
 }
 
 /** 音の立ち上がり / 減衰（秒）。短い音でも切れないよう長さに合わせて詰める。 */
