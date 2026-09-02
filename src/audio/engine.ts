@@ -524,13 +524,14 @@ export class Engine {
   }
 
   /**
-   * 開いているドラム / ロールの格子を選択トラックへ向ける（#76）。
-   * 選んだのが別種のトラックなら格子はそのまま、閉じている格子は開かない
-   * （選択のたびにパネルが出てくると邪魔なので）。
+   * 開いているパネル（FX / ドラム格子 / ロール）を選択トラックへ向ける（#76 / #79）。
+   * FX は全トラック共通なのでそのまま追従し、格子は選んだのが別種のトラックなら
+   * そのまま。閉じているパネルは開かない（選択のたびに出てくると邪魔なので）。
    */
   private followSelection(): void {
     const t = this.selectedId ? this.find(this.selectedId) : undefined;
     if (!t) return;
+    if (this.fxId) this.fxId = t.id;
     if (this.drumsId && t.drums) this.drumsId = t.id;
     if (this.rollId && t.roll) this.rollId = t.id;
   }
@@ -1198,6 +1199,8 @@ export class Engine {
 
   toggleFxPanel(id: string): void {
     this.fxId = this.fxId === id ? null : id;
+    /* 開いたパネルと選択を食い違わせない（#79）。閉じるときは選択に触らない。 */
+    if (this.fxId) this.selectedId = id;
     this.emit();
   }
 
