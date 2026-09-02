@@ -13,12 +13,24 @@ type DeckProps = {
   savedAt: number | null;
   /** 保存・復元・削除の実行中。多重実行を防ぐ。 */
   storeBusy: boolean;
+  /** 自動保存（#80）が ON か。 */
+  auto: boolean;
   onSave: () => void;
   onRestore: () => void;
   onDiscard: () => void;
+  onToggleAuto: () => void;
 };
 
-export function Deck({ snap, savedAt, storeBusy, onSave, onRestore, onDiscard }: DeckProps) {
+export function Deck({
+  snap,
+  savedAt,
+  storeBusy,
+  auto,
+  onSave,
+  onRestore,
+  onDiscard,
+  onToggleAuto,
+}: DeckProps) {
   const picker = useRef<HTMLInputElement>(null);
   const idle = snap.tracks.length === 0;
 
@@ -207,6 +219,19 @@ export function Deck({ snap, savedAt, storeBusy, onSave, onRestore, onDiscard }:
           onClick={onSave}
         >
           プロジェクトを保存
+        </button>
+        <button
+          className="ghost"
+          aria-pressed={auto}
+          data-testid="autosave"
+          title={
+            auto
+              ? "編集するたびこの端末のブラウザ内に保存する。リロードしても続きから開く"
+              : "自動保存は切ってある。保存は「プロジェクトを保存」を押したときだけ"
+          }
+          onClick={onToggleAuto}
+        >
+          自動保存 {auto ? "ON" : "OFF"}
         </button>
         {savedAt !== null && idle && (
           <button className="ghost" disabled={storeBusy} onClick={onRestore}>

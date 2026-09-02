@@ -171,6 +171,8 @@ export class Engine {
 
   private listeners = new Set<() => void>();
   private frameListeners = new Set<() => void>();
+  /** 音に効く変更（touched）だけを受け取る購読。自動保存（#80）用。 */
+  private touchListeners = new Set<() => void>();
   private snap: Snapshot = this.build();
 
   /* ── 購読 ──────────────────────────────────────────────────────────── */
@@ -261,7 +263,20 @@ export class Engine {
   private touched(): void {
     this.invalidateRender();
     this.emit();
+    for (const fn of this.touchListeners) fn();
   }
+
+  /**
+   * 音に効く変更（`touched()`）だけの購読。自動保存（#80）が使う。
+   *
+   * `subscribe()` と分けているのは、選択・ズーム・パネルの開閉でも保存が走ると
+   * 意味の無い書き込みが増えるため。「音に効くなら touched()」の区別（#49）が
+   * そのまま「保存に値する変更か」の区別になっている。
+   */
+  onTouched = (fn: () => void): (() => void) => {
+    this.touchListeners.add(fn);
+    return () => this.touchListeners.delete(fn);
+  };
 
   /**
    * レンダー結果を捨てる。試聴中ならそれも止める。作り直しはしない
@@ -357,7 +372,9 @@ export class Engine {
        既に鳴っているトラックがファイルの数だけ途切れる）。 */
     if (this.tracks.length > before) this.rebuildIfPlaying();
     this.refreshTelemetry();
-    this.emit();
+    /* トラックの増減は音に効く変更なので touched() で締める（README「作りの前提」）。
+       ここが emit() のままだと、読み込んだトラックが自動保存に乗らない（#80）。 */
+    this.touched();
   }
 
   /**
@@ -610,7 +627,10 @@ export class Engine {
    */
   async importProject(meta: ProjectMeta, blobs: Blob[]): Promise<void> {
     const ctx = this.audio();
-    if (ctx.state === "suspended") await ctx.resume();
+    /* resume は**待たない**。起動時の自動復元（#80）はユーザー操作の前に走るので、
+       ここで待つと許可が下りるまで進まず、復元そのものが止まる。デコードは
+       suspended のままでもできるし、再生時は play() が resume する。 */
+    if (ctx.state === "suspended") void ctx.resume();
     this.halt(true);
     this.seekAt = 0;
     while (this.tracks.length) this.remove(this.tracks[0].id);
@@ -945,6 +965,8 @@ export class Engine {
         `${name} — ${buf.duration.toFixed(2)}s / ${buf.numberOfChannels}ch / ${buf.sampleRate}Hz / ` +
           `位置 ${this.recAt.toFixed(2)}s / デコード ${ms.toFixed(0)}ms`,
       );
+      /* 録音もトラックが増える＝音に効く変更。自動保存（#80）に乗せる。 */
+      this.touched();
     } catch {
       /* 本物が出ないので、仮クリップも消す（残すと差し替わらないまま居座る）。 */
       this.take = null;
@@ -1040,6 +1062,8 @@ export class Engine {
           ? `。うち ${r.skipped}音は対応する音色が無いので鳴らしていません（タム・シンバル類）`
           : ""),
     );
+    /* マイク録音と同じく、トラックが増えたので touched() で締める（#80）。 */
+    this.touched();
   }
 
   /* ── グループバス ──────────────────────────────────────────────────── */

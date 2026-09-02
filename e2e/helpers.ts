@@ -3,6 +3,7 @@ import { test as base, expect, type Page } from "@playwright/test";
 
 export { makeTone } from "./fixture";
 export { expect };
+export type { Page };
 
 /**
  * 全 spec 共通の土台。トップページを開いてから本体を実行し、
