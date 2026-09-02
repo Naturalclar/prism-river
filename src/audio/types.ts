@@ -136,6 +136,8 @@ export type Snapshot = {
   /** WAV / webm / MP3 のどれかが走っている。書き出しは同時に1つだけ（#51）。 */
   exporting: boolean;
   recording: boolean;
+  /** MIDI 実機入力の録音中（#56）。マイク録音とは独立。 */
+  midiRecording: boolean;
   /** webm の実時間書き出し中。 */
   webmBusy: boolean;
   /** MP3（WASM）の書き出し中。 */
