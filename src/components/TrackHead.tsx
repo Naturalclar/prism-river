@@ -19,6 +19,7 @@ export function TrackHead({
       className={`head${t.selected ? " selected" : ""}`}
       style={{ "--tc": t.color } as CSSProperties}
       data-testid="track-head"
+      data-track-id={t.id}
       onClick={(e) => {
         /* S / M / ✕ やスライダーの操作では選択を動かさない。 */
         if ((e.target as Element).closest("button, input")) return;

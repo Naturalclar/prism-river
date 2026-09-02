@@ -27,3 +27,26 @@ test("EQ の低シェルフが書き出しに効く", async ({ page }) => {
   expect(before).toBeGreaterThan(3000);
   expect(after).toBeLessThan(before * 0.6);
 });
+
+test("FX を開いたまま選択を変えると、パネルもそのトラックに切り替わる（#79）", async ({ page }) => {
+  await load(page, [makeTone("a.wav", 150, 1), makeTone("b.wav", 300, 1)]);
+  const heads = page.getByTestId("track-head");
+  const title = page.getByTestId("fxpanel").locator(".fx-top b").first();
+
+  /* 1本目の FX を開くと、そのトラックが選択になる。 */
+  await heads.nth(0).getByRole("button", { name: /のエフェクト$/ }).click();
+  await expect(title).toHaveText("a");
+  await expect(heads.nth(0)).toHaveClass(/selected/);
+  await setRange(page, "[data-testid=fx-low]", -12);
+  await expect(page.getByTestId("fxpanel")).toContainText("-12 dB");
+
+  /* ラックで2本目を選ぶと、パネルは2本目（EQ は素のまま）になる。 */
+  await heads.nth(1).locator(".head-name").click();
+  await expect(title).toHaveText("b");
+  await expect(page.getByTestId("fx-low")).toHaveValue("0");
+
+  /* 戻すと、さっき下げた LOW が残っている。 */
+  await heads.nth(0).locator(".head-name").click();
+  await expect(title).toHaveText("a");
+  await expect(page.getByTestId("fx-low")).toHaveValue("-12");
+});

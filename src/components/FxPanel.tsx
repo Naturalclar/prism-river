@@ -22,8 +22,9 @@ const COMP: readonly {
 ];
 
 /**
- * 選択とは独立に、ヘッダの FX ボタンで開くトラックエフェクトのパネル。
- * パラメータは常設ノードに直結しているので、再生中でも即座に効く。
+ * ヘッダの FX ボタンで開くトラックエフェクトのパネル。開いている間は
+ * 選択トラックに追従する（#79）。パラメータは常設ノードに直結しているので、
+ * 再生中でも即座に効く。
  */
 export function FxPanel({ snap }: { snap: Snapshot }) {
   const t = snap.tracks.find((x) => x.id === snap.fxId);
