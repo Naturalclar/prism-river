@@ -8,6 +8,7 @@ import {
   presetHits,
   STEPS,
   stepSec,
+  voiceForGmNote,
   type DrumPattern,
 } from "./drums";
 
@@ -45,7 +46,7 @@ describe("stepSec / patternDuration", () => {
 
 describe("expandPattern", () => {
   it("置いた位置がステップ番号 × ステップ長になる", () => {
-    expect(expandPattern(oneKick(0))).toEqual([{ voice: "kick", atSec: 0 }]);
+    expect(expandPattern(oneKick(0))).toEqual([{ voice: "kick", atSec: 0, velocity: 1 }]);
     expect(expandPattern(oneKick(4))[0].atSec).toBeCloseTo(0.5, 6);
     expect(expandPattern(oneKick(15))[0].atSec).toBeCloseTo(1.875, 6);
   });
@@ -92,6 +93,26 @@ describe("presetHits", () => {
 
   it("クリアは全部 false", () => {
     expect(Object.values(presetHits("empty")).flat().some(Boolean)).toBe(false);
+  });
+});
+
+describe("voiceForGmNote", () => {
+  it("GM のドラムマップを音色に対応づける", () => {
+    expect(voiceForGmNote(35)).toBe("kick");
+    expect(voiceForGmNote(36)).toBe("kick");
+    expect(voiceForGmNote(38)).toBe("snare");
+    expect(voiceForGmNote(40)).toBe("snare");
+    expect(voiceForGmNote(42)).toBe("hatClosed");
+    expect(voiceForGmNote(44)).toBe("hatClosed");
+    expect(voiceForGmNote(46)).toBe("hatOpen");
+    /* シンバル類は余韻の長いノイズが一番近いのでオープンハットに寄せる。 */
+    expect(voiceForGmNote(49)).toBe("hatOpen");
+    expect(voiceForGmNote(51)).toBe("hatOpen");
+  });
+
+  it("対応する音色が無いものは null（黙って鳴らさない対象）", () => {
+    /* タム類（41/43/45/47/48/50）と範囲外。 */
+    for (const n of [41, 43, 45, 47, 48, 50, 0, 127]) expect(voiceForGmNote(n)).toBeNull();
   });
 });
 

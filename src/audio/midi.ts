@@ -1,4 +1,6 @@
+import { voiceForGmNote, type DrumHit } from "../lib/drums";
 import { DRUM_CHANNEL, midiToHz, type MidiNote, type MidiSong } from "../lib/midi";
+import { renderDrumHits } from "./drums";
 
 /**
  * 解析済み MIDI を内蔵シンセでオフラインレンダーする（#46 段1）。
@@ -45,10 +47,37 @@ function masterGainFor(notes: MidiNote[]): number {
 export type MidiRenderResult = { buf: AudioBuffer; ms: number; rendered: number; skipped: number };
 
 /**
- * ノート列を鳴らして AudioBuffer にする。ドラム（チャンネル10）は段1では
- * 音源が無いので鳴らさず、本数を返して呼び出し側がログに出せるようにする。
+ * チャンネル10 のノートを #54 のドラム音源で鳴らす（#58）。音色は4つしか
+ * 無いので、対応の無いノート（タム類など）は鳴らさず本数だけ返す。
+ */
+async function renderDrumChannel(
+  song: MidiSong,
+  sampleRate: number,
+): Promise<MidiRenderResult> {
+  const t0 = performance.now();
+  const hits: DrumHit[] = [];
+  let skipped = 0;
+  for (const n of song.notes) {
+    const voice = voiceForGmNote(n.midi);
+    if (!voice) {
+      skipped++;
+      continue;
+    }
+    hits.push({ voice, atSec: n.startSec, velocity: n.velocity / 127 });
+  }
+  const r = await renderDrumHits(hits, song.durationSec, sampleRate);
+  return { buf: r.buf, ms: performance.now() - t0, rendered: hits.length, skipped };
+}
+
+/**
+ * ノート列を鳴らして AudioBuffer にする。チャンネル10 だけのノート列は
+ * ドラム音源へ回す（#58）。鳴らせなかった本数は呼び出し側がログに出す。
  */
 export async function renderMidi(song: MidiSong, sampleRate: number): Promise<MidiRenderResult> {
+  /* 呼び出し側がチャンネルごとに分けて渡すので、ここでの判定は全部か否かでよい。 */
+  if (song.notes.length && song.notes.every((n) => n.channel === DRUM_CHANNEL)) {
+    return renderDrumChannel(song, sampleRate);
+  }
   const play = song.notes.filter((n) => n.channel !== DRUM_CHANNEL);
   const skipped = song.notes.length - play.length;
   const t0 = performance.now();
