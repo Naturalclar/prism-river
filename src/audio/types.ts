@@ -1,5 +1,6 @@
 import type { Peaks } from "../lib/peaks";
 import type { DrumPattern } from "../lib/drums";
+import type { RollPattern } from "../lib/pianoroll";
 import type { BusId, BusVols } from "../lib/store";
 
 /* 先頭3色は騒霊三姉妹。弦=ルナサ / 管=メルラン / 鍵盤=リリカ。
@@ -38,6 +39,8 @@ export type Track = {
   midiChannel: number | null;
   /** アプリ内で作ったドラムパターン（#54）。生成トラックはこれが音の正本。 */
   drums: DrumPattern | null;
+  /** ピアノロールで打ち込んだノート（#55）。同じく生成トラックの正本。 */
+  roll: RollPattern | null;
   buf: AudioBuffer;
   gain: GainNode;
   pan: StereoPannerNode;
@@ -93,6 +96,8 @@ export type TrackView = {
   selected: boolean;
   /** ドラムトラックならそのパターン。格子 UI の表示元（#54）。 */
   drums: DrumPattern | null;
+  /** 打ち込みトラックならそのノート列。ピアノロールの表示元（#55）。 */
+  roll: RollPattern | null;
 };
 
 export type Telemetry = {
@@ -121,6 +126,8 @@ export type Snapshot = {
   fxId: string | null;
   /** ドラム格子を開いているトラック。無ければ null（#54）。 */
   drumsId: string | null;
+  /** ピアノロールを開いているトラック。無ければ null（#55）。 */
+  rollId: string | null;
   telemetry: Telemetry;
   message: string;
   hasRender: boolean;

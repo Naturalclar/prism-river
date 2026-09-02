@@ -9,6 +9,15 @@ import {
   type PresetId,
 } from "../lib/drums";
 import { DRUM_CHANNEL, MidiParseError, parseSmf, type MidiSong } from "../lib/midi";
+import {
+  decodeRoll,
+  emptyRoll,
+  encodeRoll,
+  toMidiSong,
+  toggleNote,
+  type NoteLength,
+  type RollPattern,
+} from "../lib/pianoroll";
 import { MP3_KBPS } from "../lib/mp3";
 import { computePeaks, type Peaks } from "../lib/peaks";
 import { BUS_IDS, type BusId, type BusVols, type ProjectMeta } from "../lib/store";
@@ -56,6 +65,13 @@ const DRUMS_EXT = /\.drums\.json$/i;
 
 function isDrumsFile(f: { name: string }): boolean {
   return DRUMS_EXT.test(f.name);
+}
+
+/* 打ち込みトラックの目印（#55）。ドラムと同じく srcBytes は音ではなくノートの JSON。 */
+const ROLL_EXT = /\.roll\.json$/i;
+
+function isRollFile(f: { name: string }): boolean {
+  return ROLL_EXT.test(f.name);
 }
 
 /** エラー文言の分岐用。音声の取り込みか、動画からの音声取り出しか。 */
@@ -109,6 +125,10 @@ export class Engine {
   private fxId: string | null = null;
   private drumsId: string | null = null;
   private drumCount = 0;
+  private rollId: string | null = null;
+  private rollCount = 0;
+  /** 打ち込みの再レンダーも非同期なので、ドラムと同じく世代を持つ。 */
+  private rollGen = 0;
   /** ドラムの再レンダーは非同期なので、古い結果で上書きしないための世代。 */
   private drumGen = 0;
   private auditionSrc: AudioBufferSourceNode | null = null;
@@ -179,6 +199,7 @@ export class Engine {
         dimmed: t.mute || (solo && !t.solo),
         selected: t.id === this.selectedId,
         drums: t.drums ? { ...t.drums, hits: { ...t.drums.hits } } : null,
+        roll: t.roll ? { ...t.roll, notes: [...t.roll.notes] } : null,
       })),
       pxPerSec: this.pxPerSec,
       playing: this.playing,
@@ -188,6 +209,7 @@ export class Engine {
       busVol: { ...this.busVol },
       fxId: this.fxId,
       drumsId: this.drumsId,
+      rollId: this.rollId,
       telemetry: this.telemetry,
       message: this.message,
       hasRender: this.lastRender !== null,
@@ -443,6 +465,7 @@ export class Engine {
       srcBytes,
       midiChannel: null,
       drums: null,
+      roll: null,
       buf,
       gain,
       pan,
@@ -493,6 +516,7 @@ export class Engine {
     if (this.selectedId === id) this.selectedId = null;
     if (this.fxId === id) this.fxId = null;
     if (this.drumsId === id) this.drumsId = null;
+    if (this.rollId === id) this.rollId = null;
     this.stopSrc(t);
     try {
       t.gain.disconnect();
@@ -582,11 +606,16 @@ export class Engine {
       const drums = isDrumsFile({ name: m.srcName })
         ? decodeDrumPattern(new TextDecoder().decode(bytes))
         : null;
+      const roll = isRollFile({ name: m.srcName })
+        ? decodeRoll(new TextDecoder().decode(bytes))
+        : null;
       const decoding = drums
         ? renderDrums(drums, ctx.sampleRate).then((r) => r.buf)
-        : isMidiFile({ name: m.srcName })
-          ? this.renderMidiChannel(ctx, bytes, m.midiChannel)
-          : ctx.decodeAudioData(bytes);
+        : roll
+          ? renderMidi(toMidiSong(roll), ctx.sampleRate).then((r) => r.buf)
+          : isMidiFile({ name: m.srcName })
+            ? this.renderMidiChannel(ctx, bytes, m.midiChannel)
+            : ctx.decodeAudioData(bytes);
       // oxlint-disable-next-line no-await-in-loop
       const buf = await decoding;
       const ms = performance.now() - t0;
@@ -594,6 +623,7 @@ export class Engine {
       const t = this.push(m.name, m.srcName, blobs[i], buf, ms);
       t.midiChannel = m.midiChannel ?? null;
       t.drums = drums;
+      t.roll = roll;
       t.vol = clamp(m.vol, 0, 1.4);
       t.panv = clamp(m.panv, -1, 1);
       t.pan.pan.value = t.panv;
@@ -710,6 +740,109 @@ export class Engine {
     const t = this.find(id);
     if (!t?.drums) return;
     void this.renderDrumsInto(t, { ...t.drums, hits: presetHits(preset) });
+  }
+
+  /* ── ピアノロール（#55） ───────────────────────────────────────────── */
+
+  /**
+   * ノート列から AudioBuffer を作ってトラックに載せ替える。追加も編集もここを通る。
+   * 鳴らすのは読み込んだ MIDI と同じ内蔵シンセ（`toMidiSong` で開くだけ）なので、
+   * レンダー側は1行も変えずに済む。
+   */
+  private async renderRollInto(t: Track, roll: RollPattern): Promise<void> {
+    const ctx = this.audio();
+    if (ctx.state === "suspended") await ctx.resume();
+    /* ドラムと同じく、連打で古いレンダーが後から返るのを防ぐ。 */
+    const gen = ++this.rollGen;
+    const r = await renderMidi(toMidiSong(roll), ctx.sampleRate);
+    if (gen !== this.rollGen || !this.tracks.includes(t)) return;
+
+    t.roll = roll;
+    t.buf = r.buf;
+    t.srcBytes = new Blob([encodeRoll(roll)], { type: "application/json" });
+    /* 尺が変わるのでトリムとフェードは掛け直し（ドラムと同じ理由）。 */
+    t.trimStart = 0;
+    t.trimEnd = r.buf.duration;
+    t.fadeIn = 0;
+    t.fadeOut = 0;
+    t.peaks = null;
+    this.say(
+      `${t.name} — ${roll.bpm}BPM / ${roll.bars}小節 / ${roll.notes.length}音 / ${r.buf.duration.toFixed(2)}s（レンダー ${r.ms.toFixed(0)}ms）`,
+    );
+    this.rebuildIfPlaying();
+    this.touched();
+  }
+
+  /** 打ち込みトラックを1本足してロールを開く。空の格子から始まる（#55）。 */
+  async addRoll(): Promise<void> {
+    const ctx = this.audio();
+    if (ctx.state === "suspended") await ctx.resume();
+    const roll = emptyRoll(120, 1);
+    const r = await renderMidi(toMidiSong(roll), ctx.sampleRate);
+    const name = `打ち込み ${++this.rollCount}`;
+    const t = this.push(
+      name,
+      `${name}.roll.json`,
+      new Blob([encodeRoll(roll)], { type: "application/json" }),
+      r.buf,
+      r.ms,
+    );
+    t.roll = roll;
+    this.rollId = t.id;
+    this.refreshTelemetry();
+    this.rebuildIfPlaying();
+    this.say(`${name} を追加しました（${roll.bpm}BPM / ${roll.bars}小節）。格子を押すと音が置けます。`);
+    this.touched();
+  }
+
+  toggleRollPanel(id: string): void {
+    this.rollId = this.rollId === id ? null : id;
+    this.emit();
+  }
+
+  /** 格子のマス目。置く / もう一度押すと外す。 */
+  toggleRollNote(id: string, step: number, midi: number, len: NoteLength): void {
+    const t = this.find(id);
+    if (!t?.roll) return;
+    void this.renderRollInto(t, { ...t.roll, notes: toggleNote(t.roll.notes, step, midi, len) });
+  }
+
+  setRollBpm(id: string, bpm: number): void {
+    const t = this.find(id);
+    if (!t?.roll) return;
+    void this.renderRollInto(t, { ...t.roll, bpm });
+  }
+
+  /** 小節数。ドラムと違い格子が横に伸びるので、縮めると外に出た音は消える。 */
+  setRollBars(id: string, bars: number): void {
+    const t = this.find(id);
+    if (!t?.roll) return;
+    const total = bars * 16;
+    void this.renderRollInto(t, {
+      ...t.roll,
+      bars,
+      notes: t.roll.notes.filter((n) => n.step < total),
+    });
+  }
+
+  /** 表示するオクターブ。音そのものは動かさないので、レンダーし直さなくてよい。 */
+  setRollOctave(id: string, octave: number): void {
+    const t = this.find(id);
+    if (!t?.roll) return;
+    t.roll = { ...t.roll, octave };
+    this.emit();
+  }
+
+  setRollProgram(id: string, program: number): void {
+    const t = this.find(id);
+    if (!t?.roll) return;
+    void this.renderRollInto(t, { ...t.roll, program });
+  }
+
+  clearRoll(id: string): void {
+    const t = this.find(id);
+    if (!t?.roll) return;
+    void this.renderRollInto(t, { ...t.roll, notes: [] });
   }
 
   /* ── 録音 ──────────────────────────────────────────────────────────── */

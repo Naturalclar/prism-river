@@ -247,6 +247,44 @@ input[type=range]::-moz-range-thumb{
 .drum-presets{display:flex; gap:5px; flex-wrap:wrap}
 .drum-presets .ghost{padding:3px 8px; font-size:10.5px}
 .drum-note{color:var(--text-faint); font-size:9.5px; line-height:1.4}
+
+/* ピアノロール（#55）。ドラムの格子と同じ見た目で、行が音程になる。 */
+.rollpanel{
+  position:fixed; left:12px; right:12px; bottom:56px; z-index:21;
+  background:var(--panel); border:1px solid var(--line-strong); border-radius:6px;
+  box-shadow:var(--shadow); padding:10px 12px;
+  display:flex; flex-direction:column; gap:7px;
+}
+.rollpanel .fx-top{display:flex; align-items:center; gap:8px}
+.rollpanel .fx-top b{font-size:12px; flex:1 1 auto}
+.rollpanel .fx-top span{
+  font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-faint);
+}
+.rollpanel .head-pot span{width:auto; min-width:34px}
+.rollpanel .head-pot em{width:34px}
+/* 2オクターブぶんの行があるので、縦横ともスクロールさせる。 */
+.roll-grid{
+  display:flex; flex-direction:column; gap:1px;
+  max-height:260px; overflow:auto; padding-right:4px;
+}
+.roll-row{display:flex; align-items:center; gap:1px}
+/* 黒鍵の行を沈めると、目で音程を追える。 */
+.roll-row.black{background:color-mix(in srgb, var(--bg) 70%, transparent)}
+.roll-key{
+  width:42px; flex:0 0 auto; font-size:9px; color:var(--text-faint);
+  position:sticky; left:0; background:var(--panel);
+}
+.roll-cell{
+  width:15px; height:13px; flex:0 0 auto; padding:0; cursor:pointer;
+  background:var(--bg); border:1px solid var(--line); border-radius:2px;
+}
+.roll-cell.beat{border-color:var(--line-strong)}
+.roll-cell.on{background:var(--accent); border-color:var(--accent)}
+/* 音の続き。押せるのは頭だけなので、色を薄くして区別する。 */
+.roll-cell.held{background:color-mix(in srgb, var(--accent) 45%, transparent)}
+.roll-controls{display:flex; align-items:center; gap:12px; flex-wrap:wrap}
+.roll-lens{display:flex; gap:3px}
+.roll-lens .tog.on{background:var(--accent); border-color:var(--accent); color:var(--bg)}
 .clip .tag{
   position:absolute; left:5px; top:3px; font-size:9.5px; letter-spacing:.05em;
   color:var(--tc); font-weight:600; pointer-events:none;

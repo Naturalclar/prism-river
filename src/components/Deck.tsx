@@ -148,6 +148,13 @@ export function Deck({ snap, savedAt, storeBusy, onSave, onRestore, onDiscard }:
         </button>
         <button
           className="ghost"
+          title="ピアノロールでノートを打ち込んでトラックにする"
+          onClick={() => void engine.addRoll()}
+        >
+          打ち込みを追加
+        </button>
+        <button
+          className="ghost"
           disabled={idle || snap.exporting}
           onClick={() => void engine.bounce()}
         >

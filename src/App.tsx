@@ -9,6 +9,7 @@ import {
 import { engine } from "./audio/instance";
 import { Deck } from "./components/Deck";
 import { DrumPanel } from "./components/DrumPanel";
+import { RollPanel } from "./components/RollPanel";
 import { FxPanel } from "./components/FxPanel";
 import { Probe } from "./components/Probe";
 import { Reel } from "./components/Reel";
@@ -166,6 +167,7 @@ export default function App() {
                 t={t}
                 fxOpen={snap.fxId === t.id}
                 drumsOpen={snap.drumsId === t.id}
+                rollOpen={snap.rollId === t.id}
                 key={t.id}
               />
             ))}
@@ -179,6 +181,7 @@ export default function App() {
 
       <FxPanel snap={snap} />
       <DrumPanel snap={snap} />
+      <RollPanel snap={snap} />
       <Probe snap={snap} />
     </>
   );
