@@ -11,6 +11,16 @@
  * DOM に依存しないので vitest からそのまま叩ける（`lib/` の他と同じ方針）。
  */
 
+import {
+  BARS_MAX,
+  BARS_MIN,
+  STEPS,
+  barsDuration,
+  clampBpm,
+  clampNum as clamp,
+  stepSec,
+} from "./grid";
+
 /** 音色。増やすなら格子の行が増えるだけで、展開もレンダーも変わらない。 */
 export const DRUM_VOICES = ["kick", "snare", "hatClosed", "hatOpen"] as const;
 export type DrumVoice = (typeof DRUM_VOICES)[number];
@@ -22,13 +32,17 @@ export const VOICE_LABEL: Record<DrumVoice, string> = {
   hatOpen: "オープンハット",
 };
 
-/** 1小節あたりのステップ数。16分音符なので 4拍 × 4。 */
-export const STEPS = 16;
-
-export const BPM_MIN = 40;
-export const BPM_MAX = 240;
-export const BARS_MIN = 1;
-export const BARS_MAX = 4;
+/* 刻みとテンポはピアノロール（#55）と共通。2つの格子が別々の時間軸を持つと
+   並べたときに拍が合わなくなるので、`lib/grid.ts` を正本にする。 */
+export {
+  BARS_MAX,
+  BARS_MIN,
+  BPM_MAX,
+  BPM_MIN,
+  STEPS,
+  barsDuration,
+  stepSec,
+} from "./grid";
 
 export type DrumPattern = {
   bpm: number;
@@ -43,16 +57,9 @@ export type DrumPattern = {
  */
 export type DrumHit = { voice: DrumVoice; atSec: number; velocity: number };
 
-const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
-
-/** 1ステップ（16分音符）の長さ（秒）。120BPM なら 0.125s。 */
-export function stepSec(bpm: number): number {
-  return 60 / clamp(bpm, BPM_MIN, BPM_MAX) / (STEPS / 4);
-}
-
 /** パターン全体の長さ（秒）。`bars 小節 × 4拍`。 */
 export function patternDuration(p: DrumPattern): number {
-  return stepSec(p.bpm) * STEPS * clamp(p.bars, BARS_MIN, BARS_MAX);
+  return barsDuration(p.bpm, p.bars);
 }
 
 const emptyRow = (): boolean[] => Array.from({ length: STEPS }, () => false);
@@ -178,7 +185,7 @@ export function decodeDrumPattern(json: string): DrumPattern | null {
   const hits = p.hits as Record<string, unknown>;
   if (!DRUM_VOICES.every((voice) => isRow(hits[voice]))) return null;
   return {
-    bpm: clamp(p.bpm, BPM_MIN, BPM_MAX),
+    bpm: clampBpm(p.bpm),
     bars: clamp(Math.round(p.bars), BARS_MIN, BARS_MAX),
     hits: {
       kick: [...(hits.kick as boolean[])],

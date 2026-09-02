@@ -7,10 +7,12 @@ export function TrackHead({
   t,
   fxOpen,
   drumsOpen,
+  rollOpen,
 }: {
   t: TrackView;
   fxOpen: boolean;
   drumsOpen: boolean;
+  rollOpen: boolean;
 }) {
   return (
     <div
@@ -64,6 +66,18 @@ export function TrackHead({
             onClick={() => engine.toggleDrumPanel(t.id)}
           >
             D
+          </button>
+        )}
+        {/* 打ち込みトラックだけロールを開き直せるようにする（#55）。 */}
+        {t.roll && (
+          <button
+            className="tog"
+            aria-pressed={rollOpen}
+            title="ピアノロール"
+            aria-label={`${t.name} のロール`}
+            onClick={() => engine.toggleRollPanel(t.id)}
+          >
+            R
           </button>
         )}
         <button
