@@ -112,6 +112,13 @@ export default function App() {
         engine.removeSelected();
         return;
       }
+      /* Ctrl+D / Cmd+D で選択中トラックの複製（#77）。preventDefault で
+         ブラウザのブックマーク登録を抑止する。 */
+      if ((e.ctrlKey || e.metaKey) && e.code === "KeyD") {
+        e.preventDefault();
+        engine.duplicateSelected();
+        return;
+      }
       if (e.code !== "Space") return;
       e.preventDefault();
       engine.toggle();

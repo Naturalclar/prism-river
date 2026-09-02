@@ -14,7 +14,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "measure:long": "node scripts/measure-long.mjs"
+    "measure:long": "node scripts/measure-long.mjs",
+    "ogp": "node scripts/ogp/generate.mjs"
   },
   "dependencies": {
     "react": "^19.1.0",
