@@ -132,6 +132,7 @@ export function Clip({ t, pxPerSec }: { t: TrackView; pxPerSec: number }) {
       className={`clip${t.dimmed ? " off" : ""}${t.selected ? " selected" : ""}`}
       style={{ "--tc": t.color, left: t.offset * pxPerSec, width: w } as CSSProperties}
       data-testid="clip"
+      data-track-id={t.id}
       onPointerDown={(e) => start(e, "move")}
       onPointerMove={move}
       onPointerUp={up}

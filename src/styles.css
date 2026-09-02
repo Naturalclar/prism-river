@@ -301,6 +301,16 @@ input[type=range]::-moz-range-thumb{
 }
 .clip.off{opacity:.3}
 
+/* 右クリックメニュー（#78）。パネル類と同じ見た目トークンで。 */
+.ctxmenu{
+  position:fixed; z-index:40; min-width:120px;
+  background:var(--panel); border:1px solid var(--line-strong); border-radius:6px;
+  box-shadow:var(--shadow); padding:4px; display:flex; flex-direction:column; gap:1px;
+}
+.ctxmenu button{text-align:left; padding:6px 10px; border-radius:4px; font-size:12.5px}
+.ctxmenu button:hover{background:var(--accent-soft)}
+.ctxmenu button.danger:hover{background:var(--danger); color:#fff}
+
 .needle{
   position:absolute; top:0; bottom:0; width:1px; background:var(--accent);
   pointer-events:none; z-index:4;
