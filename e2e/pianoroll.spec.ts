@@ -93,3 +93,22 @@ test("保存してリロードするとノートごと復元される", async ({
   await expect(page.getByTestId("roll-60-5")).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByTestId("roll-60-0")).toHaveAttribute("aria-pressed", "false");
 });
+
+/* #71: 音色ボタンは .tog（幅22px・1〜2文字想定）の流用で、「オルガン」等の
+   複数文字ラベルが1文字ずつ折り返して縦にはみ出していた。折り返すと
+   scrollHeight が1行ぶんを超えるので、機械的に検知できる。 */
+test("音色・長さのボタンはラベルが1行に収まる", async ({ page }) => {
+  await page.getByRole("button", { name: "打ち込みを追加", exact: true }).click();
+  await expect(page.getByTestId("rollpanel")).toBeVisible();
+  const overflowing = await Promise.all(
+    ["roll-tone-16", "roll-tone-0", "roll-len-8"].map(async (id) => {
+      const fits = await page
+        .getByTestId(id)
+        .evaluate(
+          (el) => el.scrollHeight <= el.clientHeight + 1 && el.scrollWidth <= el.clientWidth + 1,
+        );
+      return fits ? null : id;
+    }),
+  );
+  expect(overflowing.filter(Boolean)).toEqual([]);
+});
