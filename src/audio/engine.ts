@@ -20,6 +20,7 @@ import {
 } from "../lib/pianoroll";
 import { MP3_KBPS } from "../lib/mp3";
 import { computePeaks, type Peaks } from "../lib/peaks";
+import { SNAP_PX, snapOffset } from "../lib/snap";
 import { BUS_IDS, type BusId, type BusVols, type ProjectMeta } from "../lib/store";
 import { clamp } from "../lib/time";
 import { trimEndTo, trimStartTo } from "../lib/trim";
@@ -1092,10 +1093,29 @@ export class Engine {
 
   /* ── クリップの移動 ────────────────────────────────────────────────── */
 
-  /** ドラッグ中に呼ぶ。DOM は呼び出し側が直に動かすので、ここでは再描画しない。 */
-  nudgeOffset(id: string, offset: number): void {
+  /**
+   * ドラッグ中に呼ぶ。スナップ後の値を返すので、呼び出し側はそれで DOM を
+   * 直に動かす（trimTo と同じ形。再描画はしない）。`snap: false`
+   * （Shift ドラッグ）で素通しになる。
+   */
+  nudgeOffset(id: string, offset: number, snap = true): { offset: number; snapped: boolean } | null {
     const t = this.find(id);
-    if (t) t.offset = Math.max(0, offset);
+    if (!t) return null;
+    const raw = Math.max(0, offset);
+    if (!snap) {
+      t.offset = raw;
+      return { offset: raw, snapped: false };
+    }
+    /* スナップ点: 0 秒と、他トラックのクリップの開始・終端（実効長）。 */
+    const targets = [0];
+    for (const x of this.tracks) {
+      if (x === t) continue;
+      targets.push(x.offset, x.offset + (x.trimEnd - x.trimStart));
+    }
+    /* しきい値はピクセルで持つ。ズームインするほど精密になる。 */
+    const r = snapOffset(raw, t.trimEnd - t.trimStart, targets, SNAP_PX / this.pxPerSec);
+    t.offset = r.offset;
+    return { offset: r.offset, snapped: r.snapped !== null };
   }
 
   /** ドラッグを離したときに呼ぶ。ここで初めて React と再生を組み直す。 */

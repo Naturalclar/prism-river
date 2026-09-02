@@ -73,9 +73,12 @@ export function Clip({ t, pxPerSec }: { t: TrackView; pxPerSec: number }) {
     if (Math.abs(dx) > 2) d.moved = true;
 
     if (d.mode === "move") {
-      const off = Math.max(0, d.off0 + dx / pxPerSec);
-      engine.nudgeOffset(t.id, off);
-      b.style.left = `${off * pxPerSec}px`;
+      /* Shift ドラッグはスナップを切る（微調整用）。吸着中は枠色で知らせる。 */
+      const r = engine.nudgeOffset(t.id, d.off0 + dx / pxPerSec, !e.shiftKey);
+      if (r) {
+        b.style.left = `${r.offset * pxPerSec}px`;
+        b.classList.toggle("snapped", r.snapped);
+      }
     } else if (d.mode === "start") {
       const r = engine.trimTo(t.id, "start", d.ts0 + dx / pxPerSec);
       if (r) {
@@ -110,7 +113,7 @@ export function Clip({ t, pxPerSec }: { t: TrackView; pxPerSec: number }) {
     const d = drag.current;
     if (!d || e.pointerId !== d.id) return;
     box.current?.releasePointerCapture(d.id);
-    box.current?.classList.remove("dragging");
+    box.current?.classList.remove("dragging", "snapped");
     if (wave.current) wave.current.style.transform = "";
     drag.current = null;
     if (!d.moved) {
