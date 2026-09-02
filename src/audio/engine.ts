@@ -533,6 +533,51 @@ export class Engine {
     if (this.selectedId) this.remove(this.selectedId);
   }
 
+  /** Ctrl+D / Cmd+D から。選択が無ければ何もしない。 */
+  duplicateSelected(): void {
+    if (this.selectedId) this.duplicate(this.selectedId);
+  }
+
+  /**
+   * トラックを複製して元の直後に挿入し、複製側を選択する（#77）。
+   * `buf` と `srcBytes` は再生・保存時に読むだけの不変データなので**参照を共有**
+   * する——コピーすると PCM がまるごと倍になるだけ（10分ステレオ1本で約202MB）。
+   * 共有のぶん、テレメトリの RAM 表示（トラックごとの合計）は実メモリより
+   * 大きく出るが、表示は現状のままにしてある。
+   */
+  duplicate(id: string): void {
+    const src = this.find(id);
+    if (!src) return;
+    const t = this.push(`${src.name} のコピー`, src.srcName, src.srcBytes, src.buf, 0);
+    /* push は末尾に足すので、元の直後へ並べ直す。 */
+    this.tracks.splice(this.tracks.indexOf(t), 1);
+    this.tracks.splice(this.tracks.indexOf(src) + 1, 0, t);
+    t.vol = src.vol;
+    t.panv = src.panv;
+    t.pan.pan.value = src.panv;
+    t.mute = src.mute;
+    /* solo は写さない（複製した瞬間に2本ソロになるのは紛らわしい）。 */
+    t.offset = src.offset;
+    t.trimStart = src.trimStart;
+    t.trimEnd = src.trimEnd;
+    t.fadeIn = src.fadeIn;
+    t.fadeOut = src.fadeOut;
+    /* fx は applyFx でデータと常設ノードの両方へ（コンプの配線込み）。 */
+    this.applyFx(t, src.fx);
+    t.bus = src.bus;
+    this.routeTrack(t);
+    t.midiChannel = src.midiChannel;
+    /* パターンはディープコピー。片方の格子の編集がもう片方に波及しない。 */
+    t.drums = src.drums ? structuredClone(src.drums) : null;
+    t.roll = src.roll ? structuredClone(src.roll) : null;
+    this.selectedId = t.id;
+    this.balance();
+    this.refreshTelemetry();
+    this.rebuildIfPlaying();
+    this.say(`${src.name} を複製しました。`);
+    this.touched();
+  }
+
   remove(id: string): void {
     const t = this.find(id);
     if (!t) return;
