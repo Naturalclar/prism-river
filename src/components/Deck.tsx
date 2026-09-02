@@ -75,6 +75,25 @@ export function Deck({ snap, savedAt, storeBusy, onSave, onRestore, onDiscard }:
             <circle cx="8" cy="8" r="4.5" />
           </svg>
         </button>
+        <button
+          className={`key${snap.midiRecording ? " rec" : ""}`}
+          title={
+            snap.midiRecording
+              ? "MIDI 録音を停止してトラックにする"
+              : "MIDI キーボードから録音（Web MIDI 対応ブラウザのみ）"
+          }
+          aria-label={snap.midiRecording ? "MIDI 録音を停止" : "MIDI キーボードから録音"}
+          aria-pressed={snap.midiRecording}
+          onClick={() => engine.toggleMidiRecord()}
+        >
+          <svg viewBox="0 0 16 16">
+            {/* 鍵盤。黒鍵2本を evenodd で抜く。 */}
+            <path
+              fillRule="evenodd"
+              d="M2 3h12v10H2V3zm3.6 1h1v5h-1V4zm3.8 0h1v5h-1V4z"
+            />
+          </svg>
+        </button>
       </div>
 
       <Clock />

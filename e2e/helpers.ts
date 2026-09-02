@@ -13,6 +13,11 @@ export const test = base.extend({
   page: async ({ page }, use) => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(e.message));
+    /* Web フォントの取得は環境（プロキシ等）によって応答が固まることがあり、
+       head の stylesheet が返らないと load / DOMContentLoaded ごと止まって
+       goto や reload がタイムアウトする。表示の検証はフォントに依存しないので、
+       e2e ではフォント取得を遮断して決定的にする。 */
+    await page.route(/https:\/\/fonts\.(googleapis|gstatic)\.com\/.*/, (r) => r.abort());
     await page.goto("/");
     await use(page);
     expect(errors).toEqual([]);
