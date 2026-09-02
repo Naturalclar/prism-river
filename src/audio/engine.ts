@@ -111,6 +111,8 @@ export class Engine {
   private rec: RecSession | null = null;
   private recRaf = 0;
   private recCount = 0;
+  /** 録音を始めたタイムライン上の位置（秒）。トラック化のとき offset に入れる（#64）。 */
+  private recAt = 0;
   private pxPerSec = 70;
   private playing = false;
   private looping = false;
@@ -868,6 +870,11 @@ export class Engine {
       return;
     }
     this.rec = res.rec;
+    /* 「● を押した時刻」ではなく「実際に録り始めた時刻」を採る。openMic は
+       getUserMedia の許可待ちで止まることがあり、その間も再生は進むので、
+       押した時刻を使うと許可にかかった秒数ぶん手前にクリップが落ちる。
+       MediaRecorder が回り始めるのは許可のあと＝ここなので、音の中身と揃う。 */
+    this.recAt = this.now();
     this.recTick();
     this.say("録音中 … もう一度 ● を押すと停止してトラックになります。");
   }
@@ -893,13 +900,17 @@ export class Engine {
       const name = `録音 ${++this.recCount}`;
       /* 保存（#18）用に、エンコード済みの録音チャンクを元ファイルとして持たせる。 */
       const ext = blob.type.includes("ogg") ? "ogg" : blob.type.includes("mp4") ? "m4a" : "webm";
-      this.push(name, `${name}.${ext}`, blob, buf, ms);
+      const t = this.push(name, `${name}.${ext}`, blob, buf, ms);
+      /* 録り始めた位置に置く（#64）。既定の 0 のままだと、曲の途中に重ねた
+         録音が毎回 0秒 へ落ちる。組み直しの前に入れること。 */
+      t.offset = this.recAt;
       /* 再生に重ねて録った場合、止めた時点から録音トラックも鳴る（#50）。
          これが無いと、オーバーダブは一度停止しないと聴き返せない。 */
       this.rebuildIfPlaying();
       this.refreshTelemetry();
       this.say(
-        `${name} — ${buf.duration.toFixed(2)}s / ${buf.numberOfChannels}ch / ${buf.sampleRate}Hz / デコード ${ms.toFixed(0)}ms`,
+        `${name} — ${buf.duration.toFixed(2)}s / ${buf.numberOfChannels}ch / ${buf.sampleRate}Hz / ` +
+          `位置 ${this.recAt.toFixed(2)}s / デコード ${ms.toFixed(0)}ms`,
       );
     } catch {
       this.say("録音をデコードできませんでした（この形式はブラウザが対応していません）");

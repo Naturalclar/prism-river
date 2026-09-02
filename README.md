@@ -47,7 +47,7 @@ pnpm dev
 - トラックごとの EQ 3バンド（`BiquadFilterNode` の低棚 200Hz / ピーキング 1kHz / 高棚 4kHz）とコンプ（`DynamicsCompressorNode`）。再生中はライブに効き、書き出しにも同じ設定が乗る
 - グループバス3系統（弦=ルナサ / 管=メルラン / 鍵盤=リリカ）。トラックを `pan → busGain → master` でサブミックスにまとめ、バス音量が再生・書き出しの両方に効く。割り当てはトグルで、外すと Master 直結に戻る
 - トラックのクリック選択と `Delete` キーでの削除
-- マイク録音（`getUserMedia` + `MediaRecorder`。停止すると録った音声がそのままトラックになる。録音中はレベルメーターに入力レベルが重なるので無音録りに気づける。録った音声も他のトラック同様、端末から出ない）
+- マイク録音（`getUserMedia` + `MediaRecorder`。停止すると録った音声がそのままトラックになり、**録り始めたタイムライン上の位置に置かれる**（再生に重ねて録れる）。録音中はレベルメーターに入力レベルが重なるので無音録りに気づける。録った音声も他のトラック同様、端末から出ない）
 - マスター音量、`AnalyserNode` による L/R レベルメーター、ズーム
 - `OfflineAudioContext` によるミックスの一括レンダーと WAV 書き出し
 - webm（Opus）書き出し（`MediaStreamAudioDestinationNode` + `MediaRecorder`。一括レンダーと違い**実時間かかる**のが仕様で、WAV の数百倍速との対比もこの台の計測対象。1分ステレオで WAV 約10MB に対し webm は約1MB）
