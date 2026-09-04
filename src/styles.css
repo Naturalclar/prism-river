@@ -131,6 +131,24 @@ input[type=range]::-moz-range-thumb{
 }
 .lanes{position:relative}
 
+/* ループ区間（#88）。ルーラーの帯とレーンの網掛けで、繰り返す範囲を示す。 */
+.loop-band{
+  position:absolute; top:0; bottom:0; z-index:2;
+  background:var(--accent-soft); border-left:1px solid var(--accent);
+  border-right:1px solid var(--accent); pointer-events:none;
+}
+.loop-x{
+  position:absolute; top:2px; right:2px; width:14px; height:14px; padding:0;
+  display:grid; place-content:center; pointer-events:auto; cursor:pointer;
+  border:1px solid var(--line-strong); border-radius:3px;
+  background:var(--panel); color:var(--text-dim); font-size:11px; line-height:1;
+}
+.loop-x:hover{color:var(--accent); border-color:var(--accent)}
+.loop-zone{
+  position:absolute; top:0; bottom:0; z-index:0; pointer-events:none;
+  background:var(--accent-soft);
+}
+
 /* track header */
 .head.selected{background:var(--accent-soft)}
 .head{

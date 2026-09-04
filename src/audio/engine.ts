@@ -21,6 +21,7 @@ import {
 import { MP3_KBPS } from "../lib/mp3";
 import { computePeaks, type Peaks } from "../lib/peaks";
 import { emptyTake, growTake, peakOfBytes, type RecTake } from "../lib/rectake";
+import { clampLoop, loopEnd, loopStart, makeLoop, type LoopRange } from "../lib/loop";
 import { SNAP_PX, snapEdge, snapOffset } from "../lib/snap";
 import { BUS_IDS, type BusId, type BusVols, type ProjectMeta } from "../lib/store";
 import { clamp } from "../lib/time";
@@ -135,6 +136,8 @@ export class Engine {
   private pxPerSec = 70;
   private playing = false;
   private looping = false;
+  /** ループ区間（#88）。null なら従来どおりミックス全体を繰り返す。 */
+  private loop: LoopRange | null = null;
   private seekAt = 0;
   private startedAt = 0;
   private raf = 0;
@@ -225,6 +228,7 @@ export class Engine {
       pxPerSec: this.pxPerSec,
       playing: this.playing,
       looping: this.looping,
+      loop: this.loop ? { ...this.loop } : null,
       duration: this.total(),
       masterVol: this.masterVol,
       busVol: { ...this.busVol },
@@ -259,6 +263,9 @@ export class Engine {
    * 編集前のミックスを鳴らす——例外も無音も出ないので気づけない類になる。
    */
   private touched(): void {
+    /* 編集で曲が短くなるとループ区間が全長の外に出ることがある（#88）。
+       到達しない終端を待ち続けないよう、音に効く変更のたびに読み直す。 */
+    this.loop = clampLoop(this.loop, this.total());
     this.invalidateRender();
     this.emit();
   }
@@ -659,7 +666,7 @@ export class Engine {
   exportProject(): { meta: ProjectMeta; blobs: Blob[] } | null {
     if (!this.tracks.length) return null;
     return {
-      meta: projectMetaOf(this.tracks, this.masterVol, this.pxPerSec, this.busVol),
+      meta: projectMetaOf(this.tracks, this.masterVol, this.pxPerSec, this.busVol, this.loop),
       blobs: this.tracks.map((t) => t.srcBytes),
     };
   }
@@ -674,6 +681,7 @@ export class Engine {
     if (ctx.state === "suspended") await ctx.resume();
     this.halt(true);
     this.seekAt = 0;
+    this.loop = null;
     while (this.tracks.length) this.remove(this.tracks[0].id);
 
     for (let i = 0; i < meta.tracks.length; i++) {
@@ -738,6 +746,8 @@ export class Engine {
     this.masterVol = clamp(meta.masterVol, 0, 1.4);
     if (this.master) this.master.gain.value = this.masterVol;
     this.pxPerSec = clamp(meta.pxPerSec, 8, 400);
+    /* 区間は復元したトラックの全長に合わせて読み直す（#88）。 */
+    this.loop = clampLoop(meta.loop ?? null, this.total());
     this.balance();
     this.refreshTelemetry();
     this.touched();
@@ -1225,8 +1235,11 @@ export class Engine {
     return { offset: r.offset, snapped: r.snapped !== null };
   }
 
-  /** スナップ点: 0 秒と、自分以外のクリップの開始・終端（実効長）。移動とトリムで共有。 */
-  private snapTargets(self: Track): number[] {
+  /**
+   * スナップ点: 0 秒と、自分以外のクリップの開始・終端（実効長）。
+   * 移動・トリム・ループ区間（#88）で共有する。`self` が null なら全クリップ。
+   */
+  private snapTargets(self: Track | null): number[] {
     const targets = [0];
     for (const x of this.tracks) {
       if (x === self) continue;
@@ -1508,13 +1521,56 @@ export class Engine {
     this.emit();
   }
 
+  /* ── ループ区間（#88） ─────────────────────────────────────────────── */
+
+  /**
+   * ルーラーのドラッグから来る2点で区間を決める。順不同で、短すぎる指定
+   * （＝ほぼクリック）は区間なしに倒れる。
+   *
+   * 区間を引いた＝繰り返したい、と読んでループも点ける。消しても looping は
+   * そのまま（区間だけ外して全体ループに戻せる）。
+   */
+  setLoop(a: number, b: number): LoopRange | null {
+    this.loop = makeLoop(a, b, this.total());
+    if (this.loop) {
+      this.looping = true;
+      this.say(`ループ範囲: ${this.loop.start.toFixed(2)}s – ${this.loop.end.toFixed(2)}s`);
+    } else {
+      this.say("ループ範囲を解除しました（全体を繰り返します）。");
+    }
+    /* 音そのものは変わらない（書き出しは全体のまま）ので emit で足りる。 */
+    this.emit();
+    return this.loop;
+  }
+
+  clearLoop(): void {
+    if (!this.loop) return;
+    this.loop = null;
+    this.say("ループ範囲を解除しました（全体を繰り返します）。");
+    this.emit();
+  }
+
+  /**
+   * ルーラーのドラッグ中に端を吸着させる（#84 のトリムと同じスナップ点）。
+   * ドラッグ中は React を挟まず DOM を直に書くので、その手前の一点計算だけを
+   * Engine から借りる形にしてある。
+   */
+  snapTime(sec: number, snap = true): number {
+    const at = Math.max(0, Math.min(this.total(), sec));
+    if (!snap) return at;
+    return snapEdge(at, this.snapTargets(null), SNAP_PX / this.pxPerSec).at;
+  }
+
   private tick = (): void => {
     const t = this.now();
     const dur = this.total();
+    /* ループ中で区間があれば、折り返しは全長ではなく区間の終わりで起きる（#88）。
+       区間の外から再生を始めた場合は、区間の終わりを通過した時点で頭へ入る。 */
+    const end = this.looping ? loopEnd(this.loop, dur) : dur;
     this.emitFrame();
-    if (dur > 0 && t >= dur - 0.001) {
+    if (dur > 0 && t >= end - 0.001) {
       if (this.looping) {
-        this.seekAt = 0;
+        this.seekAt = loopStart(this.loop);
         this.halt(true);
         this.play();
         return;

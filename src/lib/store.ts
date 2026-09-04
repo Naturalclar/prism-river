@@ -66,6 +66,8 @@ export type ProjectMeta = {
   pxPerSec: number;
   /** バス音量。無印（バス導入前の保存）は全バス 1.0 扱い。 */
   busVol?: BusVols;
+  /** ループ区間（#88）。無印（区間導入前の保存）と null は全体ループ。 */
+  loop?: { start: number; end: number } | null;
   tracks: TrackMeta[];
 };
 
@@ -120,6 +122,12 @@ function isTrackMetaBase(v: unknown): v is Omit<TrackMeta, "fx"> & { fx?: unknow
   );
 }
 
+function isLoop(v: unknown): v is { start: number; end: number } {
+  if (typeof v !== "object" || v === null) return false;
+  const r = v as Record<string, unknown>;
+  return num(r.start) && num(r.end);
+}
+
 function isBusVols(v: unknown): v is BusVols {
   if (typeof v !== "object" || v === null) return false;
   const b = v as Record<string, unknown>;
@@ -144,6 +152,8 @@ export function decodeMeta(json: string | null): ProjectMeta | null {
   if (m.version !== 1 && m.version !== PROJECT_VERSION) return null;
   if (!num(m.savedAt) || !num(m.masterVol) || !num(m.pxPerSec)) return null;
   if (m.busVol !== undefined && !isBusVols(m.busVol)) return null;
+  /* 区間導入前の保存には無い。null（＝全体ループ）も正当な値。 */
+  if (m.loop !== undefined && m.loop !== null && !isLoop(m.loop)) return null;
   if (!Array.isArray(m.tracks) || !m.tracks.every(isTrackMetaBase)) return null;
   if (m.version === PROJECT_VERSION && !m.tracks.every((t) => isFxMeta(t.fx))) return null;
   return {
@@ -152,6 +162,7 @@ export function decodeMeta(json: string | null): ProjectMeta | null {
     masterVol: m.masterVol,
     pxPerSec: m.pxPerSec,
     ...(m.busVol !== undefined ? { busVol: m.busVol as BusVols } : {}),
+    ...(isLoop(m.loop) ? { loop: m.loop } : {}),
     /* JSON.parse 直後の自前オブジェクトなので、fx の補完はその場に書いてよい。 */
     tracks: m.tracks.map((t) => Object.assign(t, { fx: isFxMeta(t.fx) ? t.fx : defaultFxMeta() })),
   };

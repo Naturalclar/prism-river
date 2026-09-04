@@ -104,4 +104,20 @@ describe("decodeMeta", () => {
     ).toBeNull();
     expect(decodeMeta(JSON.stringify({ ...meta, busVol: { strings: 1 } }))).toBeNull();
   });
+
+  /* ループ区間（#88）もバージョンを上げずに足したフィールド。 */
+  it("loop 付きの保存が往復で同じ値に戻る", () => {
+    const withLoop: ProjectMeta = { ...meta, loop: { start: 1, end: 3 } };
+    expect(decodeMeta(encodeMeta(withLoop))).toEqual(withLoop);
+  });
+
+  it("loop が無い保存・null の保存はどちらも区間なしとして読める", () => {
+    expect(decodeMeta(encodeMeta(meta))?.loop).toBeUndefined();
+    expect(decodeMeta(JSON.stringify({ ...meta, loop: null }))?.loop).toBeUndefined();
+  });
+
+  it("loop が壊れていれば null（保存なしに倒す）", () => {
+    expect(decodeMeta(JSON.stringify({ ...meta, loop: { start: 1 } }))).toBeNull();
+    expect(decodeMeta(JSON.stringify({ ...meta, loop: { start: "1", end: 3 } }))).toBeNull();
+  });
 });
