@@ -165,7 +165,7 @@ export function Deck({
       <div className="acts">
         <button
           className="ghost"
-          title="音声ファイルのほか、音声つき動画（mp4 / mov / webm 等）や MIDI（.mid）も取り込める"
+          title="音声ファイルのほか、音声つき動画（mp4 / mov / webm 等）や MIDI（.mid）、書き出したプロジェクト（.prism）も取り込める"
           onClick={() => picker.current?.click()}
         >
           音声を追加
@@ -222,6 +222,14 @@ export function Deck({
         </button>
         <button
           className="ghost"
+          disabled={idle || snap.exporting}
+          title="トラック構成と音声を1ファイル（.prism・無圧縮 ZIP）に書き出す。別の端末で開いたりバックアップに使える"
+          onClick={() => void engine.exportProjectFile()}
+        >
+          プロジェクトを書き出す
+        </button>
+        <button
+          className="ghost"
           aria-pressed={auto}
           data-testid="autosave"
           title={
@@ -248,7 +256,7 @@ export function Deck({
       <input
         type="file"
         ref={picker}
-        accept="audio/*,video/*,audio/midi,.wav,.mp3,.m4a,.aac,.ogg,.oga,.opus,.flac,.webm,.weba,.mp4,.mov,.m4v,.mkv,.mid,.midi"
+        accept="audio/*,video/*,audio/midi,.wav,.mp3,.m4a,.aac,.ogg,.oga,.opus,.flac,.webm,.weba,.mp4,.mov,.m4v,.mkv,.mid,.midi,.prism"
         multiple
         hidden
         data-testid="picker"

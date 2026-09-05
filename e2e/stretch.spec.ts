@@ -121,8 +121,8 @@ test("保存 → リロード → 復元でストレッチが戻る", async ({ p
   await expect(page.getByTestId("log")).toContainText("プロジェクトを保存しました");
 
   await page.reload();
-  await page.getByRole("button", { name: "前回を復元", exact: true }).click();
-  await expect(page.getByTestId("track-head")).toHaveCount(1);
+  /* リロードすると自動で戻る（#80）。 */
+  await expect(page.getByTestId("track-head")).toHaveCount(1, { timeout: 15_000 });
   /* 尺が戻っている＝復元でもストレッチが掛け直されている。 */
   await expect(page.locator(".clock i")).toHaveText("/ 00:04.00", { timeout: 30_000 });
 
