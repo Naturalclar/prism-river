@@ -114,6 +114,9 @@ function channelLabel(channel: number): string {
  * プレイヘッドとレベルメーターは毎フレーム動くので仮想 DOM を挟まない。
  * 構造が変わったとき（トラックの増減など）だけ `emit()` で React に知らせる。
  */
+const DEFAULT_MASTER_VOL = 0.9;
+const DEFAULT_PX_PER_SEC = 70;
+
 export class Engine {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
@@ -141,7 +144,7 @@ export class Engine {
   /** MIDI 実機入力のセッション（#56）。マイク録音とは独立に持つ。 */
   private midiIn: MidiInSession | null = null;
   private midiRecCount = 0;
-  private pxPerSec = 70;
+  private pxPerSec = DEFAULT_PX_PER_SEC;
   private playing = false;
   private looping = false;
   /** ループ区間（#88）。null なら従来どおりミックス全体を繰り返す。 */
@@ -151,7 +154,7 @@ export class Engine {
   private raf = 0;
   private decodeTotal = 0;
   private nextHue = 0;
-  private masterVol = 0.9;
+  private masterVol = DEFAULT_MASTER_VOL;
   private lastRender: AudioBuffer | null = null;
   private selectedId: string | null = null;
   private fxId: string | null = null;
@@ -769,6 +772,32 @@ export class Engine {
     this.say(
       `${f.name} を開きました（トラック ${r.meta.tracks.length} 本 / 保存日時 ${new Date(r.meta.savedAt).toLocaleString()}）。`,
     );
+  }
+
+  /**
+   * まっさらに戻す（#96）。トラックを全部消し、マスター・バス・ズーム・区間も
+   * 初期値へ。消した本数を返す。端末内の保存データはここでは触らない——
+   * 自動保存（#80）は 0 本のときは書かないので、呼び出し側（App）が意図を
+   * 確認したうえで消す。
+   */
+  newProject(): number {
+    const n = this.tracks.length;
+    this.halt(true);
+    this.seekAt = 0;
+    this.loop = null;
+    while (this.tracks.length) this.remove(this.tracks[0].id);
+    this.nextHue = 0;
+    for (const b of BUS_IDS) {
+      this.busVol[b] = 1;
+      if (this.busGain) this.busGain[b].gain.value = 1;
+    }
+    this.masterVol = DEFAULT_MASTER_VOL;
+    if (this.master) this.master.gain.value = this.masterVol;
+    this.pxPerSec = DEFAULT_PX_PER_SEC;
+    this.balance();
+    this.refreshTelemetry();
+    this.touched();
+    return n;
   }
 
   /**
