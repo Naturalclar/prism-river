@@ -23,6 +23,7 @@ import { computePeaks, type Peaks } from "../lib/peaks";
 import { emptyTake, growTake, peakOfBytes, type RecTake } from "../lib/rectake";
 import { clampLoop, loopEnd, loopStart, makeLoop, type LoopRange } from "../lib/loop";
 import { SNAP_PX, snapEdge, snapOffset } from "../lib/snap";
+import { isProjectFileName, packProject, PROJECT_FILE_NAME, unpackProject } from "../lib/projectfile";
 import {
   isIdentity,
   normalizeStretch,
@@ -363,14 +364,19 @@ export class Engine {
   async ingest(files: ArrayLike<File>): Promise<void> {
     const all = Array.from(files);
     const list = all.filter(
-      (f) => f.type.startsWith("audio/") || AUDIO_EXT.test(f.name) || isVideoFile(f) || isMidiFile(f),
+      (f) =>
+        f.type.startsWith("audio/") ||
+        AUDIO_EXT.test(f.name) ||
+        isVideoFile(f) ||
+        isMidiFile(f) ||
+        isProjectFileName(f.name),
     );
     /* 対応外は黙って落とさず、名前を挙げて伝える（#22）。 */
     const skipped = all.filter((f) => !list.includes(f));
     if (!list.length) {
       this.say(
         skipped.length
-          ? `対応外のファイルのみでした: ${skipped.map((f) => f.name).join(" / ")}（読める拡張子: mp3 / wav / m4a / aac / ogg / opus / flac / webm、動画 mp4 / mov / mkv、MIDI mid / midi）`
+          ? `対応外のファイルのみでした: ${skipped.map((f) => f.name).join(" / ")}（読める拡張子: mp3 / wav / m4a / aac / ogg / opus / flac / webm、動画 mp4 / mov / mkv、MIDI mid / midi、プロジェクト prism）`
           : "音声（または音声つき動画）ファイルが見つかりませんでした。",
       );
       return;
@@ -384,7 +390,11 @@ export class Engine {
       /* 1本ずつ順に読む。並列にすると読み込み中のログが混ざるうえ、
          デコード済みの PCM が一度にメモリへ乗る。 */
       // oxlint-disable-next-line no-await-in-loop
-      await (isMidiFile(f) ? this.ingestMidi(ctx, f) : this.decodeInto(ctx, f));
+      await (isProjectFileName(f.name)
+        ? this.ingestProjectFile(f)
+        : isMidiFile(f)
+          ? this.ingestMidi(ctx, f)
+          : this.decodeInto(ctx, f));
     }
     if (skipped.length) {
       this.say(`${skipped.length}件を対応外としてスキップ: ${skipped.map((f) => f.name).join(" / ")}`);
@@ -708,6 +718,57 @@ export class Engine {
       meta: projectMetaOf(this.tracks, this.masterVol, this.pxPerSec, this.busVol, this.loop),
       blobs: this.tracks.map((t) => t.srcBytes),
     };
+  }
+
+  /* ── プロジェクトファイル（#81） ───────────────────────────────────── */
+
+  /**
+   * プロジェクトを1ファイル（無圧縮 ZIP・.prism）に書き出す。端末内の保存と
+   * 同じ直列化をブラウザの外へ持ち出す形で、保存経路は WAV / webm / MP3 と同じ
+   * deliverBlob。サーバーには何も送らない。
+   */
+  async exportProjectFile(): Promise<void> {
+    const p = this.exportProject();
+    if (!p) return;
+    this.say("プロジェクトをまとめています …");
+    try {
+      const blob = await packProject(p.meta, p.blobs);
+      const size = (blob.size / 1048576).toFixed(1);
+      const ok = await deliverBlob(blob, PROJECT_FILE_NAME);
+      this.say(
+        ok
+          ? `プロジェクトを書き出しました: ${PROJECT_FILE_NAME}（トラック ${p.meta.tracks.length} 本 / ${size}MB / 無圧縮 ZIP。中身は project.json と音声の元ファイル）。`
+          : `プロジェクトはまとめました（${size}MB）。ただしこのビューではファイル保存が使えません。`,
+      );
+    } catch (err) {
+      this.say(`プロジェクトの書き出しに失敗しました: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
+   * .prism を読み込む。今のトラックは**置き換える**ので、消えることを先に伝えて
+   * 確認する（読み込んだ時点で自動保存（#80）が上書きに走るため、確認なしだと
+   * 端末内の保存データまで巻き込む）。
+   */
+  private async ingestProjectFile(f: File): Promise<void> {
+    const r = unpackProject(new Uint8Array(await f.arrayBuffer()));
+    if ("error" in r) {
+      this.say(`${f.name}: ${r.error}`);
+      return;
+    }
+    if (
+      this.tracks.length &&
+      !window.confirm(
+        `${f.name} を開くと、今のトラック ${this.tracks.length} 本は置き換わります（端末内の保存データも上書きされます）。続けますか？`,
+      )
+    ) {
+      this.say(`${f.name} の読み込みをやめました。今のトラックはそのままです。`);
+      return;
+    }
+    await this.importProject(r.meta, r.blobs);
+    this.say(
+      `${f.name} を開きました（トラック ${r.meta.tracks.length} 本 / 保存日時 ${new Date(r.meta.savedAt).toLocaleString()}）。`,
+    );
   }
 
   /**
