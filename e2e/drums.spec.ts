@@ -85,7 +85,7 @@ test("保存してリロードするとパターンごと復元される", async
   await expect(page.getByTestId("log")).toContainText("保存しました", { timeout: 15_000 });
 
   await page.reload();
-  await page.getByRole("button", { name: "前回を復元" }).click();
+  /* リロードすると自動で戻る（#80）。 */
   await expect(page.getByTestId("track-head")).toHaveCount(1, { timeout: 15_000 });
 
   /* 格子を開き直すと、置いた1発だけが残っている（音の正本がパターンなので、

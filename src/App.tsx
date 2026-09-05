@@ -17,13 +17,23 @@ import { ContextMenu, type MenuAt } from "./components/ContextMenu";
 import { Reel } from "./components/Reel";
 import { TrackHead } from "./components/TrackHead";
 import {
+  autoSaveOn,
   clearProject,
   freeBytes,
   loadMetaSync,
   loadProject,
   requestPersist,
+  sameBlobs,
+  saveMeta,
   saveProject,
+  setAutoSaveOn,
 } from "./lib/store";
+
+/**
+ * 自動保存の待ち時間（ms）。スライダーを動かしている最中は `touched()` が
+ * 毎フレーム飛ぶので、止まってからまとめて1回書く。
+ */
+const AUTOSAVE_DELAY = 1200;
 
 export default function App() {
   const snap = useSyncExternalStore(engine.subscribe, engine.getSnapshot);
@@ -31,17 +41,23 @@ export default function App() {
   /* 端末内に保存済みプロジェクトがあるか。中身は使わず有無と日時だけ見る。 */
   const [savedAt, setSavedAt] = useState<number | null>(() => loadMetaSync()?.savedAt ?? null);
   const [storeBusy, setStoreBusy] = useState(false);
+  const [auto, setAuto] = useState(autoSaveOn);
+  /* 前回書いた音声。同じ顔ぶれなら音声は書き直さない（メタだけで済む）。 */
+  const savedBlobs = useRef<Blob[] | null>(null);
+  const autoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /* 自動保存の失敗を伝えるのは一度だけ。毎回出すとログが埋まる。 */
+  const autoFailed = useRef(false);
   /* 右クリックメニュー（#78）。表示だけの状態なのでここに置く。 */
   const [menu, setMenu] = useState<MenuAt | null>(null);
 
-  /* 起動時に保存データがあれば、ログ欄で復元を提案する（初回マウント時のみ）。 */
+  /* 起動時に保存データがあれば、そのまま復元して前回の続きから始める（#80）。
+     「提案して待つ」をやめたのは、押しそびれたときに戻す手立てが無かったため
+     （「前回を復元」はトラックが0本のときしか出ない）。 */
   useEffect(() => {
-    const meta = loadMetaSync();
-    if (meta && engine.getSnapshot().tracks.length === 0) {
-      engine.notify(
-        `前回保存したプロジェクト（${new Date(meta.savedAt).toLocaleString()}）があります。「前回を復元」で戻せます。`,
-      );
-    }
+    if (!loadMetaSync() || engine.getSnapshot().tracks.length) return;
+    void restoreInto("前回の続きから開きました", true);
+    /* 初回マウントのみ。restoreInto は state setter と ref しか触らない。 */
+    // oxlint-disable-next-line exhaustive-deps
   }, []);
 
   const save = async () => {
@@ -59,6 +75,7 @@ export default function App() {
       }
       requestPersist();
       await saveProject(p.meta, p.blobs);
+      savedBlobs.current = p.blobs;
       setSavedAt(p.meta.savedAt);
       engine.notify(
         `プロジェクトを保存しました（トラック ${p.meta.tracks.length} 本 / 音声 ${(size / 1048576).toFixed(1)}MB / この端末のブラウザ内のみ）。`,
@@ -70,9 +87,14 @@ export default function App() {
     }
   };
 
-  const restore = async () => {
+  /**
+   * 保存データを読み戻す。起動時の自動復元（#80）と「前回を復元」の両方が通る。
+   * `openedByItself` は起動時に自分から戻したときで、そうと分かる文言にする。
+   */
+  const restoreInto = async (lead: string, openedByItself: boolean) => {
     if (storeBusy) return;
     setStoreBusy(true);
+    engine.notify(openedByItself ? "前回のプロジェクトを読み込んでいます …" : "復元中 …");
     try {
       const p = await loadProject();
       if (!p) {
@@ -81,10 +103,17 @@ export default function App() {
         return;
       }
       await engine.importProject(p.meta, p.blobs);
+      /* 復元した Blob がそのままトラックの srcBytes になるので、これを
+         「書いてある音声」として控える。直後の自動保存が音声を書き直さない。 */
+      savedBlobs.current = p.blobs;
+      cancelAutoSave();
       engine.notify(
-        `前回のプロジェクトを復元しました（トラック ${p.meta.tracks.length} 本 / 保存日時 ${new Date(p.meta.savedAt).toLocaleString()}）。`,
+        `${lead}（トラック ${p.meta.tracks.length} 本 / 保存日時 ${new Date(p.meta.savedAt).toLocaleString()}）。` +
+          (openedByItself ? "まっさらから始めるなら「保存データを消す」。" : ""),
       );
     } catch (err) {
+      /* 壊れた保存データで起動できなくなるのが最悪なので、空のまま立ち上げて
+         理由だけ伝える。 */
       engine.notify(`復元に失敗しました: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setStoreBusy(false);
@@ -95,7 +124,9 @@ export default function App() {
     if (storeBusy) return;
     setStoreBusy(true);
     try {
+      cancelAutoSave();
       await clearProject();
+      savedBlobs.current = null;
       setSavedAt(null);
       engine.notify("保存データを削除しました。");
     } catch (err) {
@@ -103,6 +134,63 @@ export default function App() {
     } finally {
       setStoreBusy(false);
     }
+  };
+
+  function cancelAutoSave() {
+    if (autoTimer.current !== null) clearTimeout(autoTimer.current);
+    autoTimer.current = null;
+  }
+
+  /* 自動保存（#80）。音に効く変更（touched）だけを受けて、止まってから1回書く。 */
+  useEffect(() => {
+    if (!auto) return;
+
+    const write = async () => {
+      const p = engine.exportProject();
+      /* トラックが0本のときは書かない。全部消したことを保存に反映すると、
+         誤って消した作業が保存データごと消える。「前回を復元」で戻せる状態を
+         残しておく方がよい（意図して消すなら「保存データを消す」がある）。 */
+      if (!p) return;
+      try {
+        if (sameBlobs(p.blobs, savedBlobs.current)) {
+          /* 音声は変わっていない＝メタ（数KB）だけ。 */
+          saveMeta(p.meta);
+        } else {
+          requestPersist();
+          await saveProject(p.meta, p.blobs);
+          savedBlobs.current = p.blobs;
+        }
+        setSavedAt(p.meta.savedAt);
+        autoFailed.current = false;
+      } catch (err) {
+        /* 容量不足などで書けないことは黙って起きる。ここで伝えないと、
+           「保存されているつもり」のまま作業を続けることになる。 */
+        if (autoFailed.current) return;
+        autoFailed.current = true;
+        engine.notify(
+          `自動保存できませんでした: ${err instanceof Error ? err.message : String(err)}。` +
+            "「プロジェクトを保存」で手動保存を試すか、不要なトラックを減らしてください。",
+        );
+      }
+    };
+
+    return engine.onTouched(() => {
+      if (autoTimer.current !== null) clearTimeout(autoTimer.current);
+      autoTimer.current = setTimeout(() => void write(), AUTOSAVE_DELAY);
+    });
+  }, [auto]);
+
+  /* 自動保存の ON / OFF。切ったら書きかけの予約も取り消す。 */
+  const toggleAuto = () => {
+    const next = !auto;
+    if (!next) cancelAutoSave();
+    setAutoSaveOn(next);
+    setAuto(next);
+    engine.notify(
+      next
+        ? "自動保存を ON にしました。編集するたび、この端末のブラウザ内に保存します。"
+        : "自動保存を OFF にしました。以後は「プロジェクトを保存」を押したときだけ保存します。",
+    );
   };
 
   /* Space で再生／一時停止、Delete / Backspace で選択中トラックの削除。
@@ -142,9 +230,11 @@ export default function App() {
         snap={snap}
         savedAt={savedAt}
         storeBusy={storeBusy}
+        auto={auto}
         onSave={() => void save()}
-        onRestore={() => void restore()}
+        onRestore={() => void restoreInto("前回のプロジェクトを復元しました", false)}
         onDiscard={() => void discard()}
+        onToggleAuto={toggleAuto}
       />
 
       <div

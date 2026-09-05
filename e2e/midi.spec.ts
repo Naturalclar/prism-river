@@ -112,8 +112,8 @@ test("保存 → リロード → 復元で MIDI 由来トラックが戻る", a
   await expect(page.getByTestId("log")).toContainText("プロジェクトを保存しました");
 
   await page.reload();
-  await page.getByRole("button", { name: "前回を復元", exact: true }).click();
-  /* 復元でも decodeAudioData に流さず MIDI 経路を通ること（通らないと 0 本になる）。 */
+  /* リロードすると自動で戻る（#80）。復元でも decodeAudioData に流さず
+     MIDI 経路を通ること（通らないと 0 本になる）。 */
   await expect(page.getByTestId("track-head")).toHaveCount(2);
   await expect(page.getByTestId("track-head").first()).toContainText("keep");
   await expect(page.locator(".clock i")).toHaveText("/ 00:01.00");

@@ -185,8 +185,46 @@ export function decodeMeta(json: string | null): ProjectMeta | null {
 /* ── ストレージ本体 ───────────────────────────────────────────────────── */
 
 const META_KEY = "prism-river.project";
+const AUTO_KEY = "prism-river.autosave";
 const DB_NAME = "prism-river";
 const DB_STORE = "audio";
+
+/**
+ * 自動保存（#80）を使うか。既定は ON。
+ *
+ * 切れるようにしてあるのは、**保存が痕跡になる場面があるから**——共用の端末で
+ * 触るときなど。「保存データを消す」だけでは、次に何か触った瞬間また書かれる。
+ */
+export function autoSaveOn(): boolean {
+  try {
+    return localStorage.getItem(AUTO_KEY) !== "off";
+  } catch {
+    /* localStorage が使えない環境では、そもそも保存できないので OFF 扱い。 */
+    return false;
+  }
+}
+
+export function setAutoSaveOn(on: boolean): void {
+  try {
+    localStorage.setItem(AUTO_KEY, on ? "on" : "off");
+  } catch {
+    /* 保存できないだけなので、この設定も諦めてよい。 */
+  }
+}
+
+/**
+ * 音声（Blob）の顔ぶれが前回の保存と同じか。**同一性で見る**——中身の比較は
+ * しない。`Blob` は差し替えなければ同じオブジェクトのままなので、トラックの
+ * 増減と生成トラックの再レンダー（新しい Blob になる）だけが false になる。
+ *
+ * 自動保存が「メタだけ書けばよいか / 音声も書き直すか」をこれで決める。
+ * 呼び出し漏れの起きる版番号方式ではなく実物を見るので、`srcBytes` を
+ * 差し替える経路が将来増えても勝手に効く。
+ */
+export function sameBlobs(now: Blob[], saved: Blob[] | null): boolean {
+  if (!saved || now.length !== saved.length) return false;
+  return now.every((b, i) => b === saved[i]);
+}
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -238,6 +276,15 @@ export async function saveProject(meta: ProjectMeta, blobs: Blob[]): Promise<voi
   } finally {
     db.close();
   }
+  localStorage.setItem(META_KEY, encodeMeta(meta));
+}
+
+/**
+ * メタだけを書き直す（#80 の自動保存）。音量やトリムを触っただけなら音声は
+ * 変わらないので、数KB の JSON を書くだけで済ませる——ここで毎回 IndexedDB へ
+ * 音声を書きに行くと、スライダーを動かすたびに数十MB の書き込みが走る。
+ */
+export function saveMeta(meta: ProjectMeta): void {
   localStorage.setItem(META_KEY, encodeMeta(meta));
 }
 

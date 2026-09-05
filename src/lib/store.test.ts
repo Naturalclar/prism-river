@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { decodeMeta, defaultFxMeta, encodeMeta, PROJECT_VERSION, type ProjectMeta } from "./store";
+import {
+  decodeMeta,
+  defaultFxMeta,
+  encodeMeta,
+  PROJECT_VERSION,
+  sameBlobs,
+  type ProjectMeta,
+} from "./store";
 
 const track = {
   name: "a",
@@ -119,5 +126,36 @@ describe("decodeMeta", () => {
   it("loop が壊れていれば null（保存なしに倒す）", () => {
     expect(decodeMeta(JSON.stringify({ ...meta, loop: { start: 1 } }))).toBeNull();
     expect(decodeMeta(JSON.stringify({ ...meta, loop: { start: "1", end: 3 } }))).toBeNull();
+  });
+});
+
+describe("sameBlobs", () => {
+  const a = new Blob(["a"]);
+  const b = new Blob(["b"]);
+
+  it("まだ一度も書いていなければ違う扱い（音声を書きに行く）", () => {
+    expect(sameBlobs([a], null)).toBe(false);
+  });
+
+  it("同じ顔ぶれ・同じ並びなら同じ", () => {
+    expect(sameBlobs([a, b], [a, b])).toBe(true);
+    expect(sameBlobs([], [])).toBe(true);
+  });
+
+  it("本数が変われば違う（トラックの増減）", () => {
+    expect(sameBlobs([a, b], [a])).toBe(false);
+    expect(sameBlobs([a], [a, b])).toBe(false);
+  });
+
+  it("差し替わっていれば違う（生成トラックの再レンダー）", () => {
+    expect(sameBlobs([a], [b])).toBe(false);
+  });
+
+  it("中身が同じでも別オブジェクトなら違う（同一性で見る）", () => {
+    expect(sameBlobs([new Blob(["a"])], [a])).toBe(false);
+  });
+
+  it("並び替えは違う扱い（保存の順とトラックの順は対応しているため）", () => {
+    expect(sameBlobs([b, a], [a, b])).toBe(false);
   });
 });
