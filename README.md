@@ -179,8 +179,8 @@ Vite + TypeScript + React + oxlint + pnpm。
 | `pnpm build` | 型チェック → 本番ビルド |
 | `pnpm lint` | oxlint（`--deny-warnings` 付き。oxlint は既定だと警告でも exit 0 になる） |
 | `pnpm typecheck` | `tsc --noEmit` |
-| `pnpm test` | vitest（ピーク計算・WAV エンコード・時間変換・トリム・フェードの単体テスト） |
-| `pnpm test:e2e` | Playwright（読み込み〜再生〜書き出しの通し） |
+| `pnpm test` | vitest（`src/**/*.test.ts` と `e2e/**/*.test.ts`。純粋関数と、E2E のテスト音源の置き方） |
+| `pnpm test:e2e` | Playwright（`e2e/**/*.spec.ts`。読み込み〜再生〜書き出しの通し） |
 | `pnpm ogp` | OGP 画像（`public/ogp.png`）を生成し直す。文言や配色を変えたときに叩く |
 | `pnpm measure:long` | 長尺・複数トラックの実測（#21）。`pnpm build` してプレビューを立てた状態で実行する。`MEASURE_MINUTES` / `MEASURE_TRACKS` で組み合わせを上書きできる |
 
@@ -216,5 +216,7 @@ Vite + TypeScript + React + oxlint + pnpm。
 | `src/components/` | 表示のみ。状態は持たない |
 
 `src/lib/` の各モジュールは純粋関数なので単体テストがあり、E2E のテスト音源も `src/lib/wav.ts` で生成している（権利のある音源をリポジトリに置かないため）。
+
+生成したテスト音源は **`test-results/fixtures/<中身のハッシュ>/<名前>`** に置く（#90）。E2E は `fullyParallel` なので、共有ディレクトリに名前そのままで書くと「同じ名前・違う中身」を要求する2つのテストが同じパスを奪い合い、書きかけのファイルを読んだ側の `decodeAudioData` が落ちる——**トラックが1本足りない**という、読み込み経路の退行と見分けのつかない失敗になる。中身でパスを分け、書き込みは一時ファイル → `rename` で通す（`e2e/fixture.ts` の `put()`）。
 
 ローカルに別の Chromium がある環境では `CHROMIUM_PATH=/path/to/chrome pnpm test:e2e` で指定できる。

@@ -1,7 +1,5 @@
-import { copyFileSync } from "node:fs";
-import { join } from "node:path";
 import { expect, load, makeTone, test } from "./helpers";
-import { FIXTURE_DIR, makeGarbage, makeToneMp3, makeToneOgg } from "./fixture";
+import { makeGarbage, makeToneMp3, makeToneOgg, putCopy } from "./fixture";
 
 /**
  * #22: decodeAudioData の対応形式。テスト時にその場生成できる形式を Chromium で
@@ -23,9 +21,7 @@ test("自前で書き出した webm（Opus）を読み戻せる", async ({ page 
   const p = await (await download).path();
   if (!p) throw new Error("download path unavailable");
   /* path() は拡張子なしの一時ファイルなので .webm を付け直す（入口の篩が拡張子を見る）。 */
-  const dst = join(FIXTURE_DIR, "roundtrip.webm");
-  copyFileSync(p, dst);
-  await page.setInputFiles("[data-testid=picker]", dst);
+  await page.setInputFiles("[data-testid=picker]", putCopy("roundtrip.webm", p));
   await expect(page.getByTestId("track-head")).toHaveCount(2);
   await expect(page.getByTestId("track-head").nth(1)).toContainText("roundtrip");
 });
