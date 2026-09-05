@@ -241,6 +241,12 @@ input[type=range]::-moz-range-thumb{
 .fxpanel .head-pot em{width:48px}
 .fxpanel input[type=range]:disabled{opacity:.35; cursor:default}
 
+/* タイムストレッチ（#25）。FX パネルと同じ作りで、重ならないよう右端に置く。 */
+.stretchpanel{left:auto; right:12px; width:262px}
+.seg-row{display:flex; align-items:center; gap:5px; flex-wrap:wrap}
+.seg-row .ghost{padding:3px 8px; font-size:10.5px}
+.fx-note{font-size:9.5px; color:var(--text-faint); margin-left:auto}
+
 /* ドラムの格子（#54）。FX パネルと同じ見た目で、右隣に並べる。 */
 .drumpanel{
   position:fixed; left:274px; bottom:56px; z-index:20;

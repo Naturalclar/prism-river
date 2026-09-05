@@ -18,6 +18,7 @@ export function Probe({ snap }: { snap: Snapshot }) {
     { id: "webm", label: "webm export", value: t.webm, ok: t.webm !== "未実行" },
     { id: "mp3", label: "MP3 encode", value: t.mp3, ok: t.mp3 !== "未実行" },
     { id: "midi", label: "MIDI render", value: t.midi, ok: t.midi !== "未実行" },
+    { id: "stretch", label: "Time stretch", value: t.stretch, ok: t.stretch !== "未実行" },
   ];
 
   return (

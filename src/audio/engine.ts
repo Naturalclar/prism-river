@@ -23,6 +23,12 @@ import { computePeaks, type Peaks } from "../lib/peaks";
 import { emptyTake, growTake, peakOfBytes, type RecTake } from "../lib/rectake";
 import { clampLoop, loopEnd, loopStart, makeLoop, type LoopRange } from "../lib/loop";
 import { SNAP_PX, snapEdge, snapOffset } from "../lib/snap";
+import {
+  isIdentity,
+  normalizeStretch,
+  rescaleSeconds,
+  type StretchParams,
+} from "../lib/stretch";
 import { BUS_IDS, type BusId, type BusVols, type ProjectMeta } from "../lib/store";
 import { clamp } from "../lib/time";
 import { trimEndTo, trimStartTo } from "../lib/trim";
@@ -31,6 +37,7 @@ import { deliverBlob, deliverWav, recordToWebm, renderMix, webmSupported } from 
 import { EQ_HIGH_HZ, EQ_LOW_HZ, EQ_MID_HZ, makeBiquad, rms, scheduleFades } from "./graph";
 import { renderDrums } from "./drums";
 import { renderMidi } from "./midi";
+import { stretchInWorker } from "./stretch";
 import { decodeMidiRec, encodeMidiRec, songFromEvents } from "../lib/midirec";
 import { openMidiIn, type MidiInSession } from "./midiin";
 import { projectMetaOf } from "./project";
@@ -150,6 +157,10 @@ export class Engine {
   private drumsId: string | null = null;
   private drumCount = 0;
   private rollId: string | null = null;
+  private stretchId: string | null = null;
+  /** ストレッチを計算中のトラック（#25）。連打で古い結果を後から被せないための世代も持つ。 */
+  private stretching = new Set<string>();
+  private stretchGen = new Map<string, number>();
   private rollCount = 0;
   /** 打ち込みの再レンダーも非同期なので、ドラムと同じく世代を持つ。 */
   private rollGen = 0;
@@ -169,6 +180,7 @@ export class Engine {
     webm: "未実行",
     mp3: "未実行",
     midi: "未実行",
+    stretch: "未実行",
     offlineOk: false,
   };
 
@@ -222,6 +234,8 @@ export class Engine {
         fx: { eq: { ...t.fx.eq }, comp: { ...t.fx.comp } },
         dimmed: t.mute || (solo && !t.solo),
         selected: t.id === this.selectedId,
+        stretch: t.stretch ? { ...t.stretch } : null,
+        stretching: this.stretching.has(t.id),
         drums: t.drums ? { ...t.drums, hits: { ...t.drums.hits } } : null,
         roll: t.roll ? { ...t.roll, notes: [...t.roll.notes] } : null,
       })),
@@ -235,6 +249,7 @@ export class Engine {
       fxId: this.fxId,
       drumsId: this.drumsId,
       rollId: this.rollId,
+      stretchId: this.stretchId,
       telemetry: this.telemetry,
       message: this.message,
       hasRender: this.lastRender !== null,
@@ -497,6 +512,9 @@ export class Engine {
       drums: null,
       roll: null,
       buf,
+      /* 等倍のうちは同じ実体。ストレッチをかけたときだけ2本になる（#25）。 */
+      rawBuf: buf,
+      stretch: null,
       gain,
       pan,
       src: null,
@@ -547,6 +565,7 @@ export class Engine {
     if (this.fxId) this.fxId = t.id;
     if (this.drumsId && t.drums) this.drumsId = t.id;
     if (this.rollId && t.roll) this.rollId = t.id;
+    if (this.stretchId) this.stretchId = t.id;
   }
 
   /** Delete キーから。選択が無ければ何もしない。 */
@@ -608,6 +627,9 @@ export class Engine {
     if (this.fxId === id) this.fxId = null;
     if (this.drumsId === id) this.drumsId = null;
     if (this.rollId === id) this.rollId = null;
+    if (this.stretchId === id) this.stretchId = null;
+    this.stretching.delete(id);
+    this.stretchGen.delete(id);
     this.stopSrc(t);
     try {
       t.gain.disconnect();
@@ -721,13 +743,21 @@ export class Engine {
       t.midiChannel = m.midiChannel ?? null;
       t.drums = drums;
       t.roll = roll;
+      /* ストレッチはトリムより先にかける（#25）。保存されているトリム・フェードは
+         ストレッチ後の秒数なので、順序を逆にすると二重に伸縮する。 */
+      const stretch = normalizeStretch(m.stretch);
+      if (!isIdentity(stretch)) {
+        // oxlint-disable-next-line no-await-in-loop
+        const r = await stretchInWorker(ctx, t.rawBuf, stretch);
+        this.putStretched(t, r.buf, stretch, false);
+      }
       t.vol = clamp(m.vol, 0, 1.4);
       t.panv = clamp(m.panv, -1, 1);
       t.pan.pan.value = t.panv;
       t.mute = m.mute;
       t.solo = m.solo;
       t.offset = Math.max(0, m.offset);
-      t.trimEnd = clamp(m.trimEnd, 0, buf.duration);
+      t.trimEnd = clamp(m.trimEnd, 0, t.buf.duration);
       t.trimStart = clamp(m.trimStart, 0, t.trimEnd);
       const eff = t.trimEnd - t.trimStart;
       t.fadeIn = clamp(m.fadeIn, 0, eff);
@@ -1417,6 +1447,104 @@ export class Engine {
     this.halt(true);
     this.seekAt = at;
     this.play();
+  }
+
+  /* ── タイムストレッチ / ピッチシフト（#25） ───────────────────────── */
+
+  toggleStretchPanel(id: string): void {
+    this.stretchId = this.stretchId === id ? null : id;
+    /* 開いたパネルと選択を食い違わせない（#76 と同じ扱い）。 */
+    if (this.stretchId) this.selectedId = id;
+    this.emit();
+  }
+
+  /**
+   * ストレッチ結果をトラックに載せる。
+   *
+   * `rescale` はトリム・フェードを新しい尺に比例させるかどうか。ユーザー操作
+   * では要る（0.5倍速にした瞬間に「後半を捨てるトリム」が曲の真ん中を指す、
+   * という音では気づけないズレになる）が、保存の復元では**保存済みの値が
+   * すでにストレッチ後の秒数**なので比例させてはいけない。
+   */
+  private putStretched(
+    t: Track,
+    buf: AudioBuffer,
+    params: StretchParams | null,
+    rescale: boolean,
+  ): void {
+    const from = t.buf.duration;
+    const to = buf.duration;
+    t.buf = buf;
+    t.stretch = params;
+    t.peaks = null;
+    if (!rescale) return;
+    t.trimStart = clamp(rescaleSeconds(t.trimStart, from, to), 0, to);
+    t.trimEnd = clamp(rescaleSeconds(t.trimEnd, from, to), t.trimStart, to);
+    const eff = t.trimEnd - t.trimStart;
+    t.fadeIn = clamp(rescaleSeconds(t.fadeIn, from, to), 0, eff);
+    t.fadeOut = clamp(rescaleSeconds(t.fadeOut, from, to), 0, Math.max(0, eff - t.fadeIn));
+  }
+
+  /** 「テンポ 0.75x / ピッチ +2半音」のような表示。ログとテレメトリで共有する。 */
+  private stretchLabel(p: StretchParams): string {
+    const semi = p.semitones === 0 ? "±0" : `${p.semitones > 0 ? "+" : ""}${p.semitones}`;
+    return `テンポ ${p.tempo}x / ピッチ ${semi}半音`;
+  }
+
+  /**
+   * トラックにタイムストレッチ / ピッチシフトをかける（#25）。
+   *
+   * かけ直しは必ず `rawBuf`（読み込んだままの音）から。かかった音に重ねると
+   * 戻せなくなるうえ、回数ぶん音が痩せる。等倍に戻すときは WASM を回さずに
+   * `rawBuf` を指し直すだけ。
+   */
+  async setStretch(id: string, params: StretchParams): Promise<void> {
+    const t = this.find(id);
+    if (!t) return;
+    const next = normalizeStretch(params);
+    const cur = t.stretch ?? { tempo: 1, semitones: 0 };
+    if (next.tempo === cur.tempo && next.semitones === cur.semitones) return;
+
+    /* 連打されると古い結果が後から返ることがあるので、最後の1回だけ採る。 */
+    const gen = (this.stretchGen.get(id) ?? 0) + 1;
+    this.stretchGen.set(id, gen);
+
+    if (isIdentity(next)) {
+      this.putStretched(t, t.rawBuf, null, true);
+      this.say(`${t.name} — 等倍に戻しました。`);
+      this.rebuildIfPlaying();
+      this.touched();
+      return;
+    }
+
+    const ctx = this.audio();
+    if (ctx.state === "suspended") await ctx.resume();
+    this.stretching.add(id);
+    this.say(`${t.name} — ${this.stretchLabel(next)} を計算中…`);
+    this.emit();
+    try {
+      const { buf, ms } = await stretchInWorker(ctx, t.rawBuf, next);
+      /* 古い世代・消えたトラックの結果は捨てる（表示中の音を勝手に差し替えない）。 */
+      if (gen !== this.stretchGen.get(id) || !this.tracks.includes(t)) return;
+      this.putStretched(t, buf, next, true);
+      const rate = ms > 0 ? t.rawBuf.duration / (ms / 1000) : 0;
+      this.telemetry.stretch = `${this.stretchLabel(next)} / ${t.rawBuf.duration.toFixed(1)}s → ${ms.toFixed(0)}ms（実時間の約${Math.round(rate)}倍速）`;
+      this.say(
+        `${t.name} — ${this.stretchLabel(next)} / ${buf.duration.toFixed(2)}s（ストレッチ ${ms.toFixed(0)}ms）`,
+      );
+      this.rebuildIfPlaying();
+      this.touched();
+    } catch (err) {
+      this.say(
+        `${t.name} のストレッチに失敗しました（${err instanceof Error ? err.message : String(err)}）`,
+      );
+    } finally {
+      /* 後から来た古い世代の後始末で、進行中の表示を消さない。 */
+      if (gen === this.stretchGen.get(id)) {
+        this.stretching.delete(id);
+        this.emit();
+      }
+    }
   }
 
   /* ── トランスポート ────────────────────────────────────────────────── */

@@ -10,6 +10,7 @@ import { engine } from "./audio/instance";
 import { Deck } from "./components/Deck";
 import { DrumPanel } from "./components/DrumPanel";
 import { RollPanel } from "./components/RollPanel";
+import { StretchPanel } from "./components/StretchPanel";
 import { FxPanel } from "./components/FxPanel";
 import { Probe } from "./components/Probe";
 import { ContextMenu, type MenuAt } from "./components/ContextMenu";
@@ -189,6 +190,7 @@ export default function App() {
                 fxOpen={snap.fxId === t.id}
                 drumsOpen={snap.drumsId === t.id}
                 rollOpen={snap.rollId === t.id}
+                stretchOpen={snap.stretchId === t.id}
                 key={t.id}
               />
             ))}
@@ -203,6 +205,7 @@ export default function App() {
       <FxPanel snap={snap} />
       <DrumPanel snap={snap} />
       <RollPanel snap={snap} />
+      <StretchPanel snap={snap} />
       {menu && <ContextMenu at={menu} onClose={() => setMenu(null)} />}
       <Probe snap={snap} />
     </>
