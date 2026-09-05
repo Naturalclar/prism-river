@@ -3,6 +3,7 @@ import type { DrumPattern } from "../lib/drums";
 import type { RollPattern } from "../lib/pianoroll";
 import type { BusId, BusVols } from "../lib/store";
 import type { LoopRange } from "../lib/loop";
+import type { StretchParams } from "../lib/stretch";
 
 /* 先頭3色は騒霊三姉妹。弦=ルナサ / 管=メルラン / 鍵盤=リリカ。
    4本目以降は同系統から外して、隣り合うトラックが混ざらないようにする。 */
@@ -43,6 +44,14 @@ export type Track = {
   /** ピアノロールで打ち込んだノート（#55）。同じく生成トラックの正本。 */
   roll: RollPattern | null;
   buf: AudioBuffer;
+  /**
+   * ストレッチ前の元バッファ（#25）。等倍のあいだは `buf` と同じ実体を指すので
+   * メモリは増えない。比率を変えるときは必ずここからかけ直す——かかった音に
+   * 重ねがけすると戻せなくなるうえ、回数ぶん音が痩せる。
+   */
+  rawBuf: AudioBuffer;
+  /** タイムストレッチ / ピッチシフトの設定（#25）。null は等倍。 */
+  stretch: StretchParams | null;
   gain: GainNode;
   pan: StereoPannerNode;
   src: AudioBufferSourceNode | null;
@@ -95,6 +104,10 @@ export type TrackView = {
   dimmed: boolean;
   /** クリックで選択中。Delete キーの削除対象。 */
   selected: boolean;
+  /** タイムストレッチの設定（#25）。null は等倍で、パネルの表示元。 */
+  stretch: StretchParams | null;
+  /** ストレッチを計算中（#25）。パネルとヘッダの表示を止めるために要る。 */
+  stretching: boolean;
   /** ドラムトラックならそのパターン。格子 UI の表示元（#54）。 */
   drums: DrumPattern | null;
   /** 打ち込みトラックならそのノート列。ピアノロールの表示元（#55）。 */
@@ -113,6 +126,8 @@ export type Telemetry = {
   mp3: string;
   /** MIDI の内蔵シンセレンダー（音数 / ms / 倍率）。#46 の計測対象。 */
   midi: string;
+  /** タイムストレッチ（Rubber Band / WASM）の処理時間と倍率。#25 の計測対象。 */
+  stretch: string;
 };
 
 export type Snapshot = {
@@ -131,6 +146,8 @@ export type Snapshot = {
   drumsId: string | null;
   /** ピアノロールを開いているトラック。無ければ null（#55）。 */
   rollId: string | null;
+  /** ストレッチのパネルを開いているトラック。無ければ null（#25）。 */
+  stretchId: string | null;
   telemetry: Telemetry;
   message: string;
   hasRender: boolean;

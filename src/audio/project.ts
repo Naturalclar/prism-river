@@ -36,6 +36,7 @@ export function projectMetaOf(
       color: t.color,
       bus: t.bus,
       ...(t.midiChannel === null ? {} : { midiChannel: t.midiChannel }),
+      ...(t.stretch === null ? {} : { stretch: { ...t.stretch } }),
     })),
   };
 }

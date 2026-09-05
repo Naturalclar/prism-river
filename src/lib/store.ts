@@ -57,6 +57,12 @@ export type TrackMeta = {
   bus?: BusId | null;
   /** MIDI 由来トラックの元チャンネル（#46）。復元時に同じチャンネルだけ鳴らし直す。 */
   midiChannel?: number;
+  /**
+   * タイムストレッチ / ピッチシフト（#25）。無印（導入前の保存）と null は等倍。
+   * トリム・フェードは**ストレッチ後の秒数**で保存されるので、復元では
+   * ストレッチを先にかけてからトリムを入れる。
+   */
+  stretch?: { tempo: number; semitones: number } | null;
 };
 
 export type ProjectMeta = {
@@ -118,8 +124,16 @@ function isTrackMetaBase(v: unknown): v is Omit<TrackMeta, "fx"> & { fx?: unknow
     /* バス導入前の保存には無いフィールドなので、欠けていてもよい。 */
     (t.bus === undefined || t.bus === null || BUS_IDS.includes(t.bus as BusId)) &&
     /* MIDI 導入前の保存にも無い。 */
-    (t.midiChannel === undefined || num(t.midiChannel))
+    (t.midiChannel === undefined || num(t.midiChannel)) &&
+    /* ストレッチ導入前の保存にも無い。null（＝等倍）も正当な値。 */
+    (t.stretch === undefined || t.stretch === null || isStretchMeta(t.stretch))
   );
+}
+
+function isStretchMeta(v: unknown): v is { tempo: number; semitones: number } {
+  if (typeof v !== "object" || v === null) return false;
+  const r = v as Record<string, unknown>;
+  return num(r.tempo) && num(r.semitones);
 }
 
 function isLoop(v: unknown): v is { start: number; end: number } {

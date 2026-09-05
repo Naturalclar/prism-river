@@ -53,6 +53,32 @@ export function wavWindowPeak(path: string, fromSec: number, toSec: number): num
 }
 
 /**
+ * 書き出された WAV の指定区間の基本周波数（Hz）を、ゼロクロス数で概算する。
+ * ピッチが動いたかを見る一番素朴な物差し——タイムストレッチ（#25）が
+ * 「速さだけ変えて高さは変えない」を守れているかは、これで足りる。
+ */
+export function wavWindowHz(path: string, fromSec: number, toSec: number): number {
+  const buf = readFileSync(path);
+  const v = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const sr = v.getUint32(24, true);
+  const ch = v.getUint16(22, true);
+  const n = Math.floor((buf.byteLength - 44) / 2);
+  const a = Math.min(n, Math.floor(fromSec * sr) * ch);
+  const b = Math.min(n, Math.floor(toSec * sr) * ch);
+  const seconds = (b - a) / ch / sr;
+  if (seconds <= 0) return 0;
+  /* L チャンネルだけ見る（インターリーブなので ch 個おき）。 */
+  let cross = 0;
+  let prev = v.getInt16(44 + a * 2, true);
+  for (let i = a + ch; i < b; i += ch) {
+    const cur = v.getInt16(44 + i * 2, true);
+    if (prev <= 0 && cur > 0) cross++;
+    prev = cur;
+  }
+  return cross / seconds;
+}
+
+/**
  * L/R レベルメーターの振れ幅（style.width の %）を ms 間サンプリングして最大値を返す。
  * 「実際に音が出ているか」を DOM 越しに見る唯一の手段（AnalyserNode の RMS が
  * そのまま幅になる）。無音なら 0 のまま。
