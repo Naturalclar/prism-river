@@ -8,6 +8,8 @@ export default defineConfig({
   build: { target: "es2022" },
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts"],
+    /* e2e/ の *.test.ts も見る（テスト音源の置き方そのものを試す・#90）。
+       Playwright 側は testMatch を *.spec.ts に絞ってあるので二重には走らない。 */
+    include: ["src/**/*.test.ts", "e2e/**/*.test.ts"],
   },
 });
