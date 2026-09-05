@@ -15,6 +15,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "measure:long": "node scripts/measure-long.mjs",
+    "measure:separate": "node scripts/measure-separate.mjs",
     "ogp": "node scripts/ogp/generate.mjs"
   },
   "dependencies": {
@@ -29,6 +30,7 @@
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^4.3.4",
+    "onnxruntime-web": "1.29.0",
     "oxlint": "^1.80.0",
     "typescript": "^5.7.0",
     "vite": "^6.0.0",
