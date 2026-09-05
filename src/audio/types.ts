@@ -2,6 +2,7 @@ import type { Peaks } from "../lib/peaks";
 import type { DrumPattern } from "../lib/drums";
 import type { RollPattern } from "../lib/pianoroll";
 import type { BusId, BusVols } from "../lib/store";
+import type { LoopRange } from "../lib/loop";
 
 /* 先頭3色は騒霊三姉妹。弦=ルナサ / 管=メルラン / 鍵盤=リリカ。
    4本目以降は同系統から外して、隣り合うトラックが混ざらないようにする。 */
@@ -119,6 +120,8 @@ export type Snapshot = {
   pxPerSec: number;
   playing: boolean;
   looping: boolean;
+  /** ループ区間（#88）。null なら従来どおりミックス全体を繰り返す。 */
+  loop: LoopRange | null;
   duration: number;
   masterVol: number;
   busVol: BusVols;

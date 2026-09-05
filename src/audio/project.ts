@@ -1,3 +1,4 @@
+import type { LoopRange } from "../lib/loop";
 import { PROJECT_VERSION, type BusVols, type ProjectMeta } from "../lib/store";
 import type { Track } from "./types";
 
@@ -10,6 +11,7 @@ export function projectMetaOf(
   masterVol: number,
   pxPerSec: number,
   busVol: BusVols,
+  loop: LoopRange | null,
 ): ProjectMeta {
   return {
     version: PROJECT_VERSION,
@@ -17,6 +19,7 @@ export function projectMetaOf(
     masterVol,
     pxPerSec,
     busVol: { ...busVol },
+    loop: loop ? { ...loop } : null,
     tracks: tracks.map((t) => ({
       name: t.name,
       srcName: t.srcName,
