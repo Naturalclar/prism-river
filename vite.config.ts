@@ -10,6 +10,6 @@ export default defineConfig({
     environment: "node",
     /* e2e/ の *.test.ts も見る（テスト音源の置き方そのものを試す・#90）。
        Playwright 側は testMatch を *.spec.ts に絞ってあるので二重には走らない。 */
-    include: ["src/**/*.test.ts", "e2e/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "e2e/**/*.test.ts", "scripts/**/*.test.mjs"],
   },
 });

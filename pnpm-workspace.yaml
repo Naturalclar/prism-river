@@ -1,3 +1,6 @@
 # esbuild はプラットフォーム別バイナリを postinstall で取りに行くので、ここで明示的に許可する。
+# protobufjs の postinstall（CLI 用のコード生成）は使わないので明示的に拒否する。
+# onnxruntime-web は計測スクリプト（#27）からしか読まず、その経路では protobufjs は要らない。
 allowBuilds:
   esbuild: true
+  protobufjs: false
