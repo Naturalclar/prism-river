@@ -120,6 +120,39 @@ export default function App() {
     }
   };
 
+  /**
+   * 新規プロジェクト（#96）。今のトラックを全部消し、端末内の保存データも消す。
+   * 自動保存（#80）は 0 本のときは書かないので、消すだけではリロードで前の
+   * プロジェクトが戻ってくる——「新しく始める」意図なら保存データごと消す。
+   */
+  const newProject = async () => {
+    if (storeBusy) return;
+    const n = engine.exportProject()?.meta.tracks.length ?? 0;
+    const parts = [
+      n ? `今のトラック ${n} 本を消します` : "",
+      savedAt !== null ? "端末内の保存データも消します" : "",
+    ].filter(Boolean);
+    if (parts.length && !window.confirm(`新規プロジェクトを始めると、${parts.join("。")}。続けますか？`)) {
+      engine.notify("新規プロジェクトをやめました。今の内容はそのままです。");
+      return;
+    }
+    setStoreBusy(true);
+    try {
+      cancelAutoSave();
+      engine.newProject();
+      await clearProject();
+      savedBlobs.current = null;
+      setSavedAt(null);
+      engine.notify(
+        `新規プロジェクトを始めました${n ? `（トラック ${n} 本を消しました）` : ""}。音声を追加するか、「プロジェクトを読み込む」で .prism を開けます。`,
+      );
+    } catch (err) {
+      engine.notify(`新規プロジェクトにできませんでした: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setStoreBusy(false);
+    }
+  };
+
   const discard = async () => {
     if (storeBusy) return;
     setStoreBusy(true);
@@ -233,6 +266,7 @@ export default function App() {
         auto={auto}
         onSave={() => void save()}
         onRestore={() => void restoreInto("前回のプロジェクトを復元しました", false)}
+        onNew={() => void newProject()}
         onDiscard={() => void discard()}
         onToggleAuto={toggleAuto}
       />

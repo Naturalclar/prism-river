@@ -18,6 +18,7 @@ type DeckProps = {
   onSave: () => void;
   onRestore: () => void;
   onDiscard: () => void;
+  onNew: () => void;
   onToggleAuto: () => void;
 };
 
@@ -29,9 +30,11 @@ export function Deck({
   onSave,
   onRestore,
   onDiscard,
+  onNew,
   onToggleAuto,
 }: DeckProps) {
   const picker = useRef<HTMLInputElement>(null);
+  const projectPicker = useRef<HTMLInputElement>(null);
   const idle = snap.tracks.length === 0;
 
   return (
@@ -214,6 +217,22 @@ export function Deck({
         )}
         <button
           className="ghost"
+          disabled={(idle && savedAt === null) || storeBusy}
+          title="トラックを全部消してまっさらから始める。端末内の保存データも消える"
+          onClick={onNew}
+        >
+          新規プロジェクト
+        </button>
+        <button
+          className="ghost"
+          disabled={storeBusy}
+          title="書き出したプロジェクト（.prism）を開く。今のトラックは置き換わる"
+          onClick={() => projectPicker.current?.click()}
+        >
+          プロジェクトを読み込む
+        </button>
+        <button
+          className="ghost"
           disabled={idle || storeBusy}
           title="トラック構成と音声をこの端末のブラウザ内に保存する"
           onClick={onSave}
@@ -260,6 +279,18 @@ export function Deck({
         multiple
         hidden
         data-testid="picker"
+        onChange={(e) => {
+          const files = e.currentTarget.files;
+          if (files) void engine.ingest(files);
+          e.currentTarget.value = "";
+        }}
+      />
+      <input
+        type="file"
+        ref={projectPicker}
+        accept=".prism"
+        hidden
+        data-testid="project-picker"
         onChange={(e) => {
           const files = e.currentTarget.files;
           if (files) void engine.ingest(files);
