@@ -43,9 +43,21 @@ export function Reel({ snap }: { snap: Snapshot }) {
         if (!el.closest(".clip") && !el.closest(".ruler")) engine.select(null);
       }}
     >
-      <Ruler width={width} pxPerSec={snap.pxPerSec} />
+      <Ruler width={width} pxPerSec={snap.pxPerSec} loop={snap.loop} />
 
       <div className="lanes" style={{ width }}>
+        {/* ループ区間をレーンにも薄く重ねる（#88）。ルーラーの帯だけだと、
+            クリップを見ているときに「どこを繰り返しているか」が視界から外れる。 */}
+        {snap.loop && (
+          <div
+            className="loop-zone"
+            data-testid="loop-zone"
+            style={{
+              left: snap.loop.start * snap.pxPerSec,
+              width: (snap.loop.end - snap.loop.start) * snap.pxPerSec,
+            }}
+          />
+        )}
         {snap.tracks.map((t) => (
           <div className="lane" key={t.id} data-testid="lane">
             <Clip t={t} pxPerSec={snap.pxPerSec} />

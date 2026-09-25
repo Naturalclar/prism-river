@@ -1,9 +1,15 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createMp3Encoder, createOggEncoder } from "wasm-media-encoders";
 import { encodeWavBytes } from "../src/lib/wav";
 
-export const FIXTURE_DIR = join(process.cwd(), "test-results", "fixtures");
+/**
+ * 生成物の置き場。**外へは出さない**（#90）。ここへ直に書く経路を作ると、
+ * 同じ名前を別のテストが同時に書く事故が戻ってくるので、書き込みは
+ * すべて `put()` に通す。
+ */
+const FIXTURE_DIR = join(process.cwd(), "test-results", "fixtures");
 
 /** 減衰する正弦波のステレオ PCM。0.5秒ごとに打ち直して波形に起伏を作る。 */
 function toneSamples(hz: number, seconds: number, sampleRate: number): [Float32Array, Float32Array] {
@@ -20,11 +26,41 @@ function toneSamples(hz: number, seconds: number, sampleRate: number): [Float32A
   return [l, r];
 }
 
+let tmpSeq = 0;
+
+/**
+ * 生成物を `<中身のハッシュ>/<名前>` に置く（#90）。
+ *
+ * 以前は共有ディレクトリに名前そのままで書いていたので、**同じ名前で違う
+ * 中身**を要求する2つのテスト（`fullyParallel` なので同時に走る）が同じパスを
+ * 奪い合い、書きかけの WAV を読んだ側の `decodeAudioData` が落ちて
+ * 「トラックが1本足りない」という、退行と見分けのつかない失敗になっていた。
+ *
+ * 中身でパスを分けると、違う中身は絶対に衝突せず、同じ中身は1つを共有する。
+ * 名前（basename）は変えない——トラック名は取り込んだファイル名から作るので、
+ * 変えると各 spec の表示検証まで書き換えになる。
+ *
+ * 書き込みは一時ファイル → `rename`（同一 FS なので原子的）。同じ中身を2つの
+ * ワーカーが同時に要求しても、読み手からは「無い」か「完全な1つ」しか見えない。
+ */
 function put(name: string, bytes: Uint8Array): string {
-  mkdirSync(FIXTURE_DIR, { recursive: true });
-  const path = join(FIXTURE_DIR, name);
-  writeFileSync(path, bytes);
+  const dir = join(FIXTURE_DIR, createHash("sha1").update(bytes).digest("hex").slice(0, 12));
+  const path = join(dir, name);
+  /* 中身がパスを決めているので、在ればそれが求めているもの。書き直さない。 */
+  if (existsSync(path)) return path;
+  mkdirSync(dir, { recursive: true });
+  const tmp = `${path}.${process.pid}.${tmpSeq++}.tmp`;
+  writeFileSync(tmp, bytes);
+  renameSync(tmp, path);
   return path;
+}
+
+/**
+ * 既にあるファイル（書き出しのダウンロード等）を同じ規則で置き直す。
+ * `put()` を通すので、これも並列に走って安全。
+ */
+export function putCopy(name: string, srcPath: string): string {
+  return put(name, readFileSync(srcPath));
 }
 
 /**

@@ -57,6 +57,12 @@ export type TrackMeta = {
   bus?: BusId | null;
   /** MIDI 由来トラックの元チャンネル（#46）。復元時に同じチャンネルだけ鳴らし直す。 */
   midiChannel?: number;
+  /**
+   * タイムストレッチ / ピッチシフト（#25）。無印（導入前の保存）と null は等倍。
+   * トリム・フェードは**ストレッチ後の秒数**で保存されるので、復元では
+   * ストレッチを先にかけてからトリムを入れる。
+   */
+  stretch?: { tempo: number; semitones: number } | null;
 };
 
 export type ProjectMeta = {
@@ -66,6 +72,8 @@ export type ProjectMeta = {
   pxPerSec: number;
   /** バス音量。無印（バス導入前の保存）は全バス 1.0 扱い。 */
   busVol?: BusVols;
+  /** ループ区間（#88）。無印（区間導入前の保存）と null は全体ループ。 */
+  loop?: { start: number; end: number } | null;
   tracks: TrackMeta[];
 };
 
@@ -116,8 +124,22 @@ function isTrackMetaBase(v: unknown): v is Omit<TrackMeta, "fx"> & { fx?: unknow
     /* バス導入前の保存には無いフィールドなので、欠けていてもよい。 */
     (t.bus === undefined || t.bus === null || BUS_IDS.includes(t.bus as BusId)) &&
     /* MIDI 導入前の保存にも無い。 */
-    (t.midiChannel === undefined || num(t.midiChannel))
+    (t.midiChannel === undefined || num(t.midiChannel)) &&
+    /* ストレッチ導入前の保存にも無い。null（＝等倍）も正当な値。 */
+    (t.stretch === undefined || t.stretch === null || isStretchMeta(t.stretch))
   );
+}
+
+function isStretchMeta(v: unknown): v is { tempo: number; semitones: number } {
+  if (typeof v !== "object" || v === null) return false;
+  const r = v as Record<string, unknown>;
+  return num(r.tempo) && num(r.semitones);
+}
+
+function isLoop(v: unknown): v is { start: number; end: number } {
+  if (typeof v !== "object" || v === null) return false;
+  const r = v as Record<string, unknown>;
+  return num(r.start) && num(r.end);
 }
 
 function isBusVols(v: unknown): v is BusVols {
@@ -144,6 +166,8 @@ export function decodeMeta(json: string | null): ProjectMeta | null {
   if (m.version !== 1 && m.version !== PROJECT_VERSION) return null;
   if (!num(m.savedAt) || !num(m.masterVol) || !num(m.pxPerSec)) return null;
   if (m.busVol !== undefined && !isBusVols(m.busVol)) return null;
+  /* 区間導入前の保存には無い。null（＝全体ループ）も正当な値。 */
+  if (m.loop !== undefined && m.loop !== null && !isLoop(m.loop)) return null;
   if (!Array.isArray(m.tracks) || !m.tracks.every(isTrackMetaBase)) return null;
   if (m.version === PROJECT_VERSION && !m.tracks.every((t) => isFxMeta(t.fx))) return null;
   return {
@@ -152,6 +176,7 @@ export function decodeMeta(json: string | null): ProjectMeta | null {
     masterVol: m.masterVol,
     pxPerSec: m.pxPerSec,
     ...(m.busVol !== undefined ? { busVol: m.busVol as BusVols } : {}),
+    ...(isLoop(m.loop) ? { loop: m.loop } : {}),
     /* JSON.parse 直後の自前オブジェクトなので、fx の補完はその場に書いてよい。 */
     tracks: m.tracks.map((t) => Object.assign(t, { fx: isFxMeta(t.fx) ? t.fx : defaultFxMeta() })),
   };
@@ -160,8 +185,46 @@ export function decodeMeta(json: string | null): ProjectMeta | null {
 /* ── ストレージ本体 ───────────────────────────────────────────────────── */
 
 const META_KEY = "prism-river.project";
+const AUTO_KEY = "prism-river.autosave";
 const DB_NAME = "prism-river";
 const DB_STORE = "audio";
+
+/**
+ * 自動保存（#80）を使うか。既定は ON。
+ *
+ * 切れるようにしてあるのは、**保存が痕跡になる場面があるから**——共用の端末で
+ * 触るときなど。「保存データを消す」だけでは、次に何か触った瞬間また書かれる。
+ */
+export function autoSaveOn(): boolean {
+  try {
+    return localStorage.getItem(AUTO_KEY) !== "off";
+  } catch {
+    /* localStorage が使えない環境では、そもそも保存できないので OFF 扱い。 */
+    return false;
+  }
+}
+
+export function setAutoSaveOn(on: boolean): void {
+  try {
+    localStorage.setItem(AUTO_KEY, on ? "on" : "off");
+  } catch {
+    /* 保存できないだけなので、この設定も諦めてよい。 */
+  }
+}
+
+/**
+ * 音声（Blob）の顔ぶれが前回の保存と同じか。**同一性で見る**——中身の比較は
+ * しない。`Blob` は差し替えなければ同じオブジェクトのままなので、トラックの
+ * 増減と生成トラックの再レンダー（新しい Blob になる）だけが false になる。
+ *
+ * 自動保存が「メタだけ書けばよいか / 音声も書き直すか」をこれで決める。
+ * 呼び出し漏れの起きる版番号方式ではなく実物を見るので、`srcBytes` を
+ * 差し替える経路が将来増えても勝手に効く。
+ */
+export function sameBlobs(now: Blob[], saved: Blob[] | null): boolean {
+  if (!saved || now.length !== saved.length) return false;
+  return now.every((b, i) => b === saved[i]);
+}
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -213,6 +276,15 @@ export async function saveProject(meta: ProjectMeta, blobs: Blob[]): Promise<voi
   } finally {
     db.close();
   }
+  localStorage.setItem(META_KEY, encodeMeta(meta));
+}
+
+/**
+ * メタだけを書き直す（#80 の自動保存）。音量やトリムを触っただけなら音声は
+ * 変わらないので、数KB の JSON を書くだけで済ませる——ここで毎回 IndexedDB へ
+ * 音声を書きに行くと、スライダーを動かすたびに数十MB の書き込みが走る。
+ */
+export function saveMeta(meta: ProjectMeta): void {
   localStorage.setItem(META_KEY, encodeMeta(meta));
 }
 

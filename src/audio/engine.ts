@@ -21,7 +21,15 @@ import {
 import { MP3_KBPS } from "../lib/mp3";
 import { computePeaks, type Peaks } from "../lib/peaks";
 import { emptyTake, growTake, peakOfBytes, type RecTake } from "../lib/rectake";
+import { clampLoop, loopEnd, loopStart, makeLoop, type LoopRange } from "../lib/loop";
 import { SNAP_PX, snapEdge, snapOffset } from "../lib/snap";
+import { isProjectFileName, packProject, PROJECT_FILE_NAME, unpackProject } from "../lib/projectfile";
+import {
+  isIdentity,
+  normalizeStretch,
+  rescaleSeconds,
+  type StretchParams,
+} from "../lib/stretch";
 import { BUS_IDS, type BusId, type BusVols, type ProjectMeta } from "../lib/store";
 import { clamp } from "../lib/time";
 import { trimEndTo, trimStartTo } from "../lib/trim";
@@ -30,6 +38,7 @@ import { deliverBlob, deliverWav, recordToWebm, renderMix, webmSupported } from 
 import { EQ_HIGH_HZ, EQ_LOW_HZ, EQ_MID_HZ, makeBiquad, rms, scheduleFades } from "./graph";
 import { renderDrums } from "./drums";
 import { renderMidi } from "./midi";
+import { stretchInWorker } from "./stretch";
 import { decodeMidiRec, encodeMidiRec, songFromEvents } from "../lib/midirec";
 import { openMidiIn, type MidiInSession } from "./midiin";
 import { projectMetaOf } from "./project";
@@ -105,6 +114,9 @@ function channelLabel(channel: number): string {
  * プレイヘッドとレベルメーターは毎フレーム動くので仮想 DOM を挟まない。
  * 構造が変わったとき（トラックの増減など）だけ `emit()` で React に知らせる。
  */
+const DEFAULT_MASTER_VOL = 0.9;
+const DEFAULT_PX_PER_SEC = 70;
+
 export class Engine {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
@@ -132,21 +144,27 @@ export class Engine {
   /** MIDI 実機入力のセッション（#56）。マイク録音とは独立に持つ。 */
   private midiIn: MidiInSession | null = null;
   private midiRecCount = 0;
-  private pxPerSec = 70;
+  private pxPerSec = DEFAULT_PX_PER_SEC;
   private playing = false;
   private looping = false;
+  /** ループ区間（#88）。null なら従来どおりミックス全体を繰り返す。 */
+  private loop: LoopRange | null = null;
   private seekAt = 0;
   private startedAt = 0;
   private raf = 0;
   private decodeTotal = 0;
   private nextHue = 0;
-  private masterVol = 0.9;
+  private masterVol = DEFAULT_MASTER_VOL;
   private lastRender: AudioBuffer | null = null;
   private selectedId: string | null = null;
   private fxId: string | null = null;
   private drumsId: string | null = null;
   private drumCount = 0;
   private rollId: string | null = null;
+  private stretchId: string | null = null;
+  /** ストレッチを計算中のトラック（#25）。連打で古い結果を後から被せないための世代も持つ。 */
+  private stretching = new Set<string>();
+  private stretchGen = new Map<string, number>();
   private rollCount = 0;
   /** 打ち込みの再レンダーも非同期なので、ドラムと同じく世代を持つ。 */
   private rollGen = 0;
@@ -166,11 +184,14 @@ export class Engine {
     webm: "未実行",
     mp3: "未実行",
     midi: "未実行",
+    stretch: "未実行",
     offlineOk: false,
   };
 
   private listeners = new Set<() => void>();
   private frameListeners = new Set<() => void>();
+  /** 音に効く変更（touched）だけを受け取る購読。自動保存（#80）用。 */
+  private touchListeners = new Set<() => void>();
   private snap: Snapshot = this.build();
 
   /* ── 購読 ──────────────────────────────────────────────────────────── */
@@ -219,18 +240,22 @@ export class Engine {
         fx: { eq: { ...t.fx.eq }, comp: { ...t.fx.comp } },
         dimmed: t.mute || (solo && !t.solo),
         selected: t.id === this.selectedId,
+        stretch: t.stretch ? { ...t.stretch } : null,
+        stretching: this.stretching.has(t.id),
         drums: t.drums ? { ...t.drums, hits: { ...t.drums.hits } } : null,
         roll: t.roll ? { ...t.roll, notes: [...t.roll.notes] } : null,
       })),
       pxPerSec: this.pxPerSec,
       playing: this.playing,
       looping: this.looping,
+      loop: this.loop ? { ...this.loop } : null,
       duration: this.total(),
       masterVol: this.masterVol,
       busVol: { ...this.busVol },
       fxId: this.fxId,
       drumsId: this.drumsId,
       rollId: this.rollId,
+      stretchId: this.stretchId,
       telemetry: this.telemetry,
       message: this.message,
       hasRender: this.lastRender !== null,
@@ -259,9 +284,25 @@ export class Engine {
    * 編集前のミックスを鳴らす——例外も無音も出ないので気づけない類になる。
    */
   private touched(): void {
+    /* 編集で曲が短くなるとループ区間が全長の外に出ることがある（#88）。
+       到達しない終端を待ち続けないよう、音に効く変更のたびに読み直す。 */
+    this.loop = clampLoop(this.loop, this.total());
     this.invalidateRender();
     this.emit();
+    for (const fn of this.touchListeners) fn();
   }
+
+  /**
+   * 音に効く変更（`touched()`）だけの購読。自動保存（#80）が使う。
+   *
+   * `subscribe()` と分けているのは、選択・ズーム・パネルの開閉でも保存が走ると
+   * 意味の無い書き込みが増えるため。「音に効くなら touched()」の区別（#49）が
+   * そのまま「保存に値する変更か」の区別になっている。
+   */
+  onTouched = (fn: () => void): (() => void) => {
+    this.touchListeners.add(fn);
+    return () => this.touchListeners.delete(fn);
+  };
 
   /**
    * レンダー結果を捨てる。試聴中ならそれも止める。作り直しはしない
@@ -326,14 +367,19 @@ export class Engine {
   async ingest(files: ArrayLike<File>): Promise<void> {
     const all = Array.from(files);
     const list = all.filter(
-      (f) => f.type.startsWith("audio/") || AUDIO_EXT.test(f.name) || isVideoFile(f) || isMidiFile(f),
+      (f) =>
+        f.type.startsWith("audio/") ||
+        AUDIO_EXT.test(f.name) ||
+        isVideoFile(f) ||
+        isMidiFile(f) ||
+        isProjectFileName(f.name),
     );
     /* 対応外は黙って落とさず、名前を挙げて伝える（#22）。 */
     const skipped = all.filter((f) => !list.includes(f));
     if (!list.length) {
       this.say(
         skipped.length
-          ? `対応外のファイルのみでした: ${skipped.map((f) => f.name).join(" / ")}（読める拡張子: mp3 / wav / m4a / aac / ogg / opus / flac / webm、動画 mp4 / mov / mkv、MIDI mid / midi）`
+          ? `対応外のファイルのみでした: ${skipped.map((f) => f.name).join(" / ")}（読める拡張子: mp3 / wav / m4a / aac / ogg / opus / flac / webm、動画 mp4 / mov / mkv、MIDI mid / midi、プロジェクト prism）`
           : "音声（または音声つき動画）ファイルが見つかりませんでした。",
       );
       return;
@@ -347,7 +393,11 @@ export class Engine {
       /* 1本ずつ順に読む。並列にすると読み込み中のログが混ざるうえ、
          デコード済みの PCM が一度にメモリへ乗る。 */
       // oxlint-disable-next-line no-await-in-loop
-      await (isMidiFile(f) ? this.ingestMidi(ctx, f) : this.decodeInto(ctx, f));
+      await (isProjectFileName(f.name)
+        ? this.ingestProjectFile(f)
+        : isMidiFile(f)
+          ? this.ingestMidi(ctx, f)
+          : this.decodeInto(ctx, f));
     }
     if (skipped.length) {
       this.say(`${skipped.length}件を対応外としてスキップ: ${skipped.map((f) => f.name).join(" / ")}`);
@@ -357,7 +407,9 @@ export class Engine {
        既に鳴っているトラックがファイルの数だけ途切れる）。 */
     if (this.tracks.length > before) this.rebuildIfPlaying();
     this.refreshTelemetry();
-    this.emit();
+    /* トラックの増減は音に効く変更なので touched() で締める（README「作りの前提」）。
+       ここが emit() のままだと、読み込んだトラックが自動保存に乗らない（#80）。 */
+    this.touched();
   }
 
   /**
@@ -490,6 +542,9 @@ export class Engine {
       drums: null,
       roll: null,
       buf,
+      /* 等倍のうちは同じ実体。ストレッチをかけたときだけ2本になる（#25）。 */
+      rawBuf: buf,
+      stretch: null,
       gain,
       pan,
       src: null,
@@ -540,6 +595,7 @@ export class Engine {
     if (this.fxId) this.fxId = t.id;
     if (this.drumsId && t.drums) this.drumsId = t.id;
     if (this.rollId && t.roll) this.rollId = t.id;
+    if (this.stretchId) this.stretchId = t.id;
   }
 
   /** Delete キーから。選択が無ければ何もしない。 */
@@ -601,6 +657,9 @@ export class Engine {
     if (this.fxId === id) this.fxId = null;
     if (this.drumsId === id) this.drumsId = null;
     if (this.rollId === id) this.rollId = null;
+    if (this.stretchId === id) this.stretchId = null;
+    this.stretching.delete(id);
+    this.stretchGen.delete(id);
     this.stopSrc(t);
     try {
       t.gain.disconnect();
@@ -659,9 +718,86 @@ export class Engine {
   exportProject(): { meta: ProjectMeta; blobs: Blob[] } | null {
     if (!this.tracks.length) return null;
     return {
-      meta: projectMetaOf(this.tracks, this.masterVol, this.pxPerSec, this.busVol),
+      meta: projectMetaOf(this.tracks, this.masterVol, this.pxPerSec, this.busVol, this.loop),
       blobs: this.tracks.map((t) => t.srcBytes),
     };
+  }
+
+  /* ── プロジェクトファイル（#81） ───────────────────────────────────── */
+
+  /**
+   * プロジェクトを1ファイル（無圧縮 ZIP・.prism）に書き出す。端末内の保存と
+   * 同じ直列化をブラウザの外へ持ち出す形で、保存経路は WAV / webm / MP3 と同じ
+   * deliverBlob。サーバーには何も送らない。
+   */
+  async exportProjectFile(): Promise<void> {
+    const p = this.exportProject();
+    if (!p) return;
+    this.say("プロジェクトをまとめています …");
+    try {
+      const blob = await packProject(p.meta, p.blobs);
+      const size = (blob.size / 1048576).toFixed(1);
+      const ok = await deliverBlob(blob, PROJECT_FILE_NAME);
+      this.say(
+        ok
+          ? `プロジェクトを書き出しました: ${PROJECT_FILE_NAME}（トラック ${p.meta.tracks.length} 本 / ${size}MB / 無圧縮 ZIP。中身は project.json と音声の元ファイル）。`
+          : `プロジェクトはまとめました（${size}MB）。ただしこのビューではファイル保存が使えません。`,
+      );
+    } catch (err) {
+      this.say(`プロジェクトの書き出しに失敗しました: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
+   * .prism を読み込む。今のトラックは**置き換える**ので、消えることを先に伝えて
+   * 確認する（読み込んだ時点で自動保存（#80）が上書きに走るため、確認なしだと
+   * 端末内の保存データまで巻き込む）。
+   */
+  private async ingestProjectFile(f: File): Promise<void> {
+    const r = unpackProject(new Uint8Array(await f.arrayBuffer()));
+    if ("error" in r) {
+      this.say(`${f.name}: ${r.error}`);
+      return;
+    }
+    if (
+      this.tracks.length &&
+      !window.confirm(
+        `${f.name} を開くと、今のトラック ${this.tracks.length} 本は置き換わります（端末内の保存データも上書きされます）。続けますか？`,
+      )
+    ) {
+      this.say(`${f.name} の読み込みをやめました。今のトラックはそのままです。`);
+      return;
+    }
+    await this.importProject(r.meta, r.blobs);
+    this.say(
+      `${f.name} を開きました（トラック ${r.meta.tracks.length} 本 / 保存日時 ${new Date(r.meta.savedAt).toLocaleString()}）。`,
+    );
+  }
+
+  /**
+   * まっさらに戻す（#96）。トラックを全部消し、マスター・バス・ズーム・区間も
+   * 初期値へ。消した本数を返す。端末内の保存データはここでは触らない——
+   * 自動保存（#80）は 0 本のときは書かないので、呼び出し側（App）が意図を
+   * 確認したうえで消す。
+   */
+  newProject(): number {
+    const n = this.tracks.length;
+    this.halt(true);
+    this.seekAt = 0;
+    this.loop = null;
+    while (this.tracks.length) this.remove(this.tracks[0].id);
+    this.nextHue = 0;
+    for (const b of BUS_IDS) {
+      this.busVol[b] = 1;
+      if (this.busGain) this.busGain[b].gain.value = 1;
+    }
+    this.masterVol = DEFAULT_MASTER_VOL;
+    if (this.master) this.master.gain.value = this.masterVol;
+    this.pxPerSec = DEFAULT_PX_PER_SEC;
+    this.balance();
+    this.refreshTelemetry();
+    this.touched();
+    return n;
   }
 
   /**
@@ -671,9 +807,13 @@ export class Engine {
    */
   async importProject(meta: ProjectMeta, blobs: Blob[]): Promise<void> {
     const ctx = this.audio();
-    if (ctx.state === "suspended") await ctx.resume();
+    /* resume は**待たない**。起動時の自動復元（#80）はユーザー操作の前に走るので、
+       ここで待つと許可が下りるまで進まず、復元そのものが止まる。デコードは
+       suspended のままでもできるし、再生時は play() が resume する。 */
+    if (ctx.state === "suspended") void ctx.resume();
     this.halt(true);
     this.seekAt = 0;
+    this.loop = null;
     while (this.tracks.length) this.remove(this.tracks[0].id);
 
     for (let i = 0; i < meta.tracks.length; i++) {
@@ -713,13 +853,21 @@ export class Engine {
       t.midiChannel = m.midiChannel ?? null;
       t.drums = drums;
       t.roll = roll;
+      /* ストレッチはトリムより先にかける（#25）。保存されているトリム・フェードは
+         ストレッチ後の秒数なので、順序を逆にすると二重に伸縮する。 */
+      const stretch = normalizeStretch(m.stretch);
+      if (!isIdentity(stretch)) {
+        // oxlint-disable-next-line no-await-in-loop
+        const r = await stretchInWorker(ctx, t.rawBuf, stretch);
+        this.putStretched(t, r.buf, stretch, false);
+      }
       t.vol = clamp(m.vol, 0, 1.4);
       t.panv = clamp(m.panv, -1, 1);
       t.pan.pan.value = t.panv;
       t.mute = m.mute;
       t.solo = m.solo;
       t.offset = Math.max(0, m.offset);
-      t.trimEnd = clamp(m.trimEnd, 0, buf.duration);
+      t.trimEnd = clamp(m.trimEnd, 0, t.buf.duration);
       t.trimStart = clamp(m.trimStart, 0, t.trimEnd);
       const eff = t.trimEnd - t.trimStart;
       t.fadeIn = clamp(m.fadeIn, 0, eff);
@@ -738,6 +886,8 @@ export class Engine {
     this.masterVol = clamp(meta.masterVol, 0, 1.4);
     if (this.master) this.master.gain.value = this.masterVol;
     this.pxPerSec = clamp(meta.pxPerSec, 8, 400);
+    /* 区間は復元したトラックの全長に合わせて読み直す（#88）。 */
+    this.loop = clampLoop(meta.loop ?? null, this.total());
     this.balance();
     this.refreshTelemetry();
     this.touched();
@@ -1014,6 +1164,8 @@ export class Engine {
         `${name} — ${buf.duration.toFixed(2)}s / ${buf.numberOfChannels}ch / ${buf.sampleRate}Hz / ` +
           `位置 ${this.recAt.toFixed(2)}s / デコード ${ms.toFixed(0)}ms`,
       );
+      /* 録音もトラックが増える＝音に効く変更。自動保存（#80）に乗せる。 */
+      this.touched();
     } catch {
       /* 本物が出ないので、仮クリップも消す（残すと差し替わらないまま居座る）。 */
       this.take = null;
@@ -1109,6 +1261,8 @@ export class Engine {
           ? `。うち ${r.skipped}音は対応する音色が無いので鳴らしていません（タム・シンバル類）`
           : ""),
     );
+    /* マイク録音と同じく、トラックが増えたので touched() で締める（#80）。 */
+    this.touched();
   }
 
   /* ── グループバス ──────────────────────────────────────────────────── */
@@ -1225,8 +1379,11 @@ export class Engine {
     return { offset: r.offset, snapped: r.snapped !== null };
   }
 
-  /** スナップ点: 0 秒と、自分以外のクリップの開始・終端（実効長）。移動とトリムで共有。 */
-  private snapTargets(self: Track): number[] {
+  /**
+   * スナップ点: 0 秒と、自分以外のクリップの開始・終端（実効長）。
+   * 移動・トリム・ループ区間（#88）で共有する。`self` が null なら全クリップ。
+   */
+  private snapTargets(self: Track | null): number[] {
     const targets = [0];
     for (const x of this.tracks) {
       if (x === self) continue;
@@ -1406,6 +1563,104 @@ export class Engine {
     this.play();
   }
 
+  /* ── タイムストレッチ / ピッチシフト（#25） ───────────────────────── */
+
+  toggleStretchPanel(id: string): void {
+    this.stretchId = this.stretchId === id ? null : id;
+    /* 開いたパネルと選択を食い違わせない（#76 と同じ扱い）。 */
+    if (this.stretchId) this.selectedId = id;
+    this.emit();
+  }
+
+  /**
+   * ストレッチ結果をトラックに載せる。
+   *
+   * `rescale` はトリム・フェードを新しい尺に比例させるかどうか。ユーザー操作
+   * では要る（0.5倍速にした瞬間に「後半を捨てるトリム」が曲の真ん中を指す、
+   * という音では気づけないズレになる）が、保存の復元では**保存済みの値が
+   * すでにストレッチ後の秒数**なので比例させてはいけない。
+   */
+  private putStretched(
+    t: Track,
+    buf: AudioBuffer,
+    params: StretchParams | null,
+    rescale: boolean,
+  ): void {
+    const from = t.buf.duration;
+    const to = buf.duration;
+    t.buf = buf;
+    t.stretch = params;
+    t.peaks = null;
+    if (!rescale) return;
+    t.trimStart = clamp(rescaleSeconds(t.trimStart, from, to), 0, to);
+    t.trimEnd = clamp(rescaleSeconds(t.trimEnd, from, to), t.trimStart, to);
+    const eff = t.trimEnd - t.trimStart;
+    t.fadeIn = clamp(rescaleSeconds(t.fadeIn, from, to), 0, eff);
+    t.fadeOut = clamp(rescaleSeconds(t.fadeOut, from, to), 0, Math.max(0, eff - t.fadeIn));
+  }
+
+  /** 「テンポ 0.75x / ピッチ +2半音」のような表示。ログとテレメトリで共有する。 */
+  private stretchLabel(p: StretchParams): string {
+    const semi = p.semitones === 0 ? "±0" : `${p.semitones > 0 ? "+" : ""}${p.semitones}`;
+    return `テンポ ${p.tempo}x / ピッチ ${semi}半音`;
+  }
+
+  /**
+   * トラックにタイムストレッチ / ピッチシフトをかける（#25）。
+   *
+   * かけ直しは必ず `rawBuf`（読み込んだままの音）から。かかった音に重ねると
+   * 戻せなくなるうえ、回数ぶん音が痩せる。等倍に戻すときは WASM を回さずに
+   * `rawBuf` を指し直すだけ。
+   */
+  async setStretch(id: string, params: StretchParams): Promise<void> {
+    const t = this.find(id);
+    if (!t) return;
+    const next = normalizeStretch(params);
+    const cur = t.stretch ?? { tempo: 1, semitones: 0 };
+    if (next.tempo === cur.tempo && next.semitones === cur.semitones) return;
+
+    /* 連打されると古い結果が後から返ることがあるので、最後の1回だけ採る。 */
+    const gen = (this.stretchGen.get(id) ?? 0) + 1;
+    this.stretchGen.set(id, gen);
+
+    if (isIdentity(next)) {
+      this.putStretched(t, t.rawBuf, null, true);
+      this.say(`${t.name} — 等倍に戻しました。`);
+      this.rebuildIfPlaying();
+      this.touched();
+      return;
+    }
+
+    const ctx = this.audio();
+    if (ctx.state === "suspended") await ctx.resume();
+    this.stretching.add(id);
+    this.say(`${t.name} — ${this.stretchLabel(next)} を計算中…`);
+    this.emit();
+    try {
+      const { buf, ms } = await stretchInWorker(ctx, t.rawBuf, next);
+      /* 古い世代・消えたトラックの結果は捨てる（表示中の音を勝手に差し替えない）。 */
+      if (gen !== this.stretchGen.get(id) || !this.tracks.includes(t)) return;
+      this.putStretched(t, buf, next, true);
+      const rate = ms > 0 ? t.rawBuf.duration / (ms / 1000) : 0;
+      this.telemetry.stretch = `${this.stretchLabel(next)} / ${t.rawBuf.duration.toFixed(1)}s → ${ms.toFixed(0)}ms（実時間の約${Math.round(rate)}倍速）`;
+      this.say(
+        `${t.name} — ${this.stretchLabel(next)} / ${buf.duration.toFixed(2)}s（ストレッチ ${ms.toFixed(0)}ms）`,
+      );
+      this.rebuildIfPlaying();
+      this.touched();
+    } catch (err) {
+      this.say(
+        `${t.name} のストレッチに失敗しました（${err instanceof Error ? err.message : String(err)}）`,
+      );
+    } finally {
+      /* 後から来た古い世代の後始末で、進行中の表示を消さない。 */
+      if (gen === this.stretchGen.get(id)) {
+        this.stretching.delete(id);
+        this.emit();
+      }
+    }
+  }
+
   /* ── トランスポート ────────────────────────────────────────────────── */
 
   total(): number {
@@ -1508,13 +1763,56 @@ export class Engine {
     this.emit();
   }
 
+  /* ── ループ区間（#88） ─────────────────────────────────────────────── */
+
+  /**
+   * ルーラーのドラッグから来る2点で区間を決める。順不同で、短すぎる指定
+   * （＝ほぼクリック）は区間なしに倒れる。
+   *
+   * 区間を引いた＝繰り返したい、と読んでループも点ける。消しても looping は
+   * そのまま（区間だけ外して全体ループに戻せる）。
+   */
+  setLoop(a: number, b: number): LoopRange | null {
+    this.loop = makeLoop(a, b, this.total());
+    if (this.loop) {
+      this.looping = true;
+      this.say(`ループ範囲: ${this.loop.start.toFixed(2)}s – ${this.loop.end.toFixed(2)}s`);
+    } else {
+      this.say("ループ範囲を解除しました（全体を繰り返します）。");
+    }
+    /* 音そのものは変わらない（書き出しは全体のまま）ので emit で足りる。 */
+    this.emit();
+    return this.loop;
+  }
+
+  clearLoop(): void {
+    if (!this.loop) return;
+    this.loop = null;
+    this.say("ループ範囲を解除しました（全体を繰り返します）。");
+    this.emit();
+  }
+
+  /**
+   * ルーラーのドラッグ中に端を吸着させる（#84 のトリムと同じスナップ点）。
+   * ドラッグ中は React を挟まず DOM を直に書くので、その手前の一点計算だけを
+   * Engine から借りる形にしてある。
+   */
+  snapTime(sec: number, snap = true): number {
+    const at = Math.max(0, Math.min(this.total(), sec));
+    if (!snap) return at;
+    return snapEdge(at, this.snapTargets(null), SNAP_PX / this.pxPerSec).at;
+  }
+
   private tick = (): void => {
     const t = this.now();
     const dur = this.total();
+    /* ループ中で区間があれば、折り返しは全長ではなく区間の終わりで起きる（#88）。
+       区間の外から再生を始めた場合は、区間の終わりを通過した時点で頭へ入る。 */
+    const end = this.looping ? loopEnd(this.loop, dur) : dur;
     this.emitFrame();
-    if (dur > 0 && t >= dur - 0.001) {
+    if (dur > 0 && t >= end - 0.001) {
       if (this.looping) {
-        this.seekAt = 0;
+        this.seekAt = loopStart(this.loop);
         this.halt(true);
         this.play();
         return;

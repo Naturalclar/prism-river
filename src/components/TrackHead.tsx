@@ -8,11 +8,13 @@ export function TrackHead({
   fxOpen,
   drumsOpen,
   rollOpen,
+  stretchOpen,
 }: {
   t: TrackView;
   fxOpen: boolean;
   drumsOpen: boolean;
   rollOpen: boolean;
+  stretchOpen: boolean;
 }) {
   return (
     <div
@@ -56,6 +58,15 @@ export function TrackHead({
           onClick={() => engine.toggleFxPanel(t.id)}
         >
           FX
+        </button>
+        <button
+          className="tog"
+          aria-pressed={stretchOpen}
+          title="タイムストレッチ (テンポ / ピッチ)"
+          aria-label={`${t.name} のストレッチ`}
+          onClick={() => engine.toggleStretchPanel(t.id)}
+        >
+          TS
         </button>
         {/* ドラムトラックだけ格子を開き直せるようにする（#54）。 */}
         {t.drums && (

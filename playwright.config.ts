@@ -8,6 +8,8 @@ const executablePath = process.env.CHROMIUM_PATH;
 
 export default defineConfig({
   testDir: "e2e",
+  /* e2e/ には vitest で回す *.test.ts も置くので、Playwright は *.spec.ts だけ見る。 */
+  testMatch: "**/*.spec.ts",
   fullyParallel: true,
   reporter: process.env.CI ? [["line"], ["html", { open: "never" }]] : "list",
   use: {
