@@ -141,8 +141,6 @@ export class Engine {
   private openingMic = false;
   private recRaf = 0;
   private recCount = 0;
-  /** 録音を始めたタイムライン上の位置（秒）。トラック化のとき offset に入れる（#64）。 */
-  private recAt = 0;
   /** 録音中の仮クリップ（#63）。本物に差し替わるまでのあいだだけ持つ。 */
   private take: RecTake | null = null;
   /** 録り始めのオーディオ時計。仮クリップの経過はこれとの差で測る（#63）。 */
@@ -273,7 +271,7 @@ export class Engine {
       exporting: this.exporting,
       recording: this.rec !== null,
       openingMic: this.openingMic,
-      recTake: this.take !== null,
+      recTakeId: this.take ? this.recCount : null,
       midiRecording: this.midiIn !== null,
       openingMidi: this.openingMidi,
       webmBusy: this.webmBusy,
@@ -1153,9 +1151,9 @@ export class Engine {
        getUserMedia の許可待ちで止まることがあり、その間も再生は進むので、
        押した時刻を使うと許可にかかった秒数ぶん手前にクリップが落ちる。
        MediaRecorder が回り始めるのは許可のあと＝ここなので、音の中身と揃う。 */
-    this.recAt = this.now();
+    this.recCount++;
     /* 録れている範囲をその場で見せる（#63）。位置は録り始めた所＝本物と同じ。 */
-    this.take = emptyTake(this.recAt);
+    this.take = emptyTake(this.now());
     this.recT0 = this.audio().currentTime;
     this.recTick();
     this.say("録音中 … もう一度 ● を押すと停止してトラックになります。");
@@ -1164,7 +1162,9 @@ export class Engine {
   /** 停止後の後始末とトラック化。Blob 以降は読み込みと同じ decode → push の経路。 */
   private async finishRecording(): Promise<void> {
     const rec = this.rec;
-    if (!rec) return;
+    const take = this.take;
+    if (!rec || !take) return;
+    const name = `録音 ${this.recCount}`;
     this.rec = null;
     cancelAnimationFrame(this.recRaf);
     const blob = collectRecording(rec);
@@ -1180,29 +1180,28 @@ export class Engine {
       const buf = await this.audio().decodeAudioData(bytes);
       const ms = performance.now() - t0;
       this.decodeTotal += ms;
-      const name = `録音 ${++this.recCount}`;
       /* 保存（#18）用に、エンコード済みの録音チャンクを元ファイルとして持たせる。 */
       const ext = blob.type.includes("ogg") ? "ogg" : blob.type.includes("mp4") ? "m4a" : "webm";
       /* 仮クリップ（#63）は本物を置く直前まで残す。デコード中に消すと、
          どこに録れたのかが一瞬だけ画面から失われる。 */
-      this.take = null;
+      if (this.take === take) this.take = null;
       const t = this.push(name, `${name}.${ext}`, blob, buf, ms);
       /* 録り始めた位置に置く（#64）。既定の 0 のままだと、曲の途中に重ねた
          録音が毎回 0秒 へ落ちる。組み直しの前に入れること。 */
-      t.offset = this.recAt;
+      t.offset = take.at;
       /* 再生に重ねて録った場合、止めた時点から録音トラックも鳴る（#50）。
          これが無いと、オーバーダブは一度停止しないと聴き返せない。 */
       this.rebuildIfPlaying();
       this.refreshTelemetry();
       this.say(
         `${name} — ${buf.duration.toFixed(2)}s / ${buf.numberOfChannels}ch / ${buf.sampleRate}Hz / ` +
-          `位置 ${this.recAt.toFixed(2)}s / デコード ${ms.toFixed(0)}ms`,
+          `位置 ${take.at.toFixed(2)}s / デコード ${ms.toFixed(0)}ms`,
       );
       /* 録音もトラックが増える＝音に効く変更。自動保存（#80）に乗せる。 */
       this.touched();
     } catch {
       /* 本物が出ないので、仮クリップも消す（残すと差し替わらないまま居座る）。 */
-      this.take = null;
+      if (this.take === take) this.take = null;
       this.say("録音をデコードできませんでした（この形式はブラウザが対応していません）");
     }
   }

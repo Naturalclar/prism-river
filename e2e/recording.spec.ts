@@ -192,3 +192,60 @@ test("録音開始に失敗しても取得済みのマイクを解放できる",
   expect(await tracks.evaluate(all => all.map(t => t.readyState))).toEqual(["ended"]);
   await expect(mic).toBeEnabled();
 });
+
+for (const failFirst of [false, true]) {
+  test(`前のテイクのデコード${failFirst ? "失敗" : "完了"}後も次の録音の波形と位置が保たれる`, async ({ page }) => {
+    await load(page, [makeTone("backing.wav", 440, 6)]);
+    const ruler = page.getByTestId("ruler");
+    const mic = page.getByRole("button", { name: "マイクから録音", exact: true });
+    const stop = page.getByRole("button", { name: "録音を停止", exact: true });
+    const ghost = page.getByTestId("rec-clip");
+    const width = () => ghost.evaluate(el => el.getBoundingClientRect().width);
+    const amplitude = () => canvasPixelSum(page, "[data-testid=rec-canvas]", 0.3);
+    await page.evaluate(() => {
+      const devices = navigator.mediaDevices;
+      const get = devices.getUserMedia.bind(devices);
+      let calls = 0;
+      devices.getUserMedia = async constraints => {
+        const stream = await get(constraints);
+        if (++calls === 2) {
+          for (const track of stream.getAudioTracks()) track.enabled = false;
+        }
+        return stream;
+      };
+    });
+    await ruler.click({ position: { x: 70, y: 8 } });
+    await mic.click();
+    await expect.poll(amplitude).toBeGreaterThan(0);
+    await page.evaluate((fail) => {
+      const decode = AudioContext.prototype.decodeAudioData;
+      AudioContext.prototype.decodeAudioData = async function (bytes) {
+        AudioContext.prototype.decodeAudioData = decode;
+        document.documentElement.dataset.heldTake = "yes";
+        await new Promise<void>(resolve => window.addEventListener("finish-take", () => resolve(), { once: true }));
+        if (fail) throw new Error("bad first take");
+        return decode.call(this, bytes);
+      };
+    }, failFirst);
+    await stop.click();
+    await expect(page.locator("html")).toHaveAttribute("data-held-take", "yes");
+    await ruler.click({ position: { x: 210, y: 8 } });
+    await mic.click();
+    await expect(ghost).toHaveCSS("left", "210px");
+    await expect.poll(width).toBeGreaterThan(15);
+    await page.evaluate(() => window.dispatchEvent(new Event("finish-take")));
+    if (failFirst) {
+      await expect(page.getByTestId("log")).toContainText("デコードできませんでした");
+    } else {
+      await expect(page.getByTestId("clip").nth(1)).toHaveCSS("left", "70px");
+    }
+    await expect(ghost).toBeVisible();
+    expect(await amplitude()).toBe(0);
+    const before = await width();
+    await expect.poll(width).toBeGreaterThan(before);
+    await stop.click();
+    await expect(ghost).toHaveCount(0);
+    await expect(page.getByTestId("clip")).toHaveCount(failFirst ? 2 : 3);
+    await expect(page.getByTestId("clip").last()).toHaveCSS("left", "210px");
+  });
+}
