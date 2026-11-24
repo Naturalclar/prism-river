@@ -55,23 +55,34 @@ test("再生に重ねた録音は、録り始めた位置に置かれる", async
 /* #63: 停止するまで何がどこに録れているのか一切出なかった回帰。**停止する前に**
    タイムライン上へ仮クリップが伸びていることを見る。 */
 test("録音中、停止する前からタイムラインに録れている範囲が出る", async ({ page }) => {
+  // 仮クリップが伸び始めるまでは、ブラウザの疑似マイクを無音に保つ。
+  await page.evaluate(() => {
+    const devices = navigator.mediaDevices;
+    const getUserMedia = devices.getUserMedia.bind(devices);
+    devices.getUserMedia = async (constraints) => {
+      const stream = await getUserMedia(constraints);
+      const tracks = stream.getAudioTracks();
+      for (const track of tracks) track.enabled = false;
+      window.addEventListener("enable-test-microphone", () => {
+        for (const track of tracks) track.enabled = true;
+      }, { once: true });
+      return stream;
+    };
+  });
   await page.getByRole("button", { name: "マイクから録音", exact: true }).click();
   await expect(page.getByTestId("log")).toContainText("録音中");
   await expect(page.getByTestId("rec-clip")).toBeVisible();
 
-  /* 実時間でしか録れないので、伸びるぶんだけ待つ。 */
-  await page.waitForTimeout(400);
-  const w1 = await page.getByTestId("rec-clip").evaluate((e) => (e as HTMLElement).offsetWidth);
-  await page.waitForTimeout(400);
-  const w2 = await page.getByTestId("rec-clip").evaluate((e) => (e as HTMLElement).offsetWidth);
-  /* 録れているぶんだけ右へ伸びる（既定ズーム 70px/s なので 400ms で約 28px）。 */
-  expect(w1).toBeGreaterThan(10);
-  expect(w2).toBeGreaterThan(w1);
+  const width = () => page.getByTestId("rec-clip").evaluate((el) => el.getBoundingClientRect().width);
+  await expect.poll(width).toBeGreaterThan(10);
+  const firstWidth = await width();
+  await expect.poll(width).toBeGreaterThan(firstWidth);
 
-  /* 中央行に描画があり、そこから外れた行にも届いている＝振幅のある帯になっている
-     （フェイクマイクはトーンを流すので、無音の1px線では終わらない）。 */
-  expect(await canvasPixelSum(page, "[data-testid=rec-canvas]")).toBeGreaterThan(0);
-  expect(await canvasPixelSum(page, "[data-testid=rec-canvas]", 0.3)).toBeGreaterThan(0);
+  const pixels = (row: number) => canvasPixelSum(page, "[data-testid=rec-canvas]", row);
+  await expect.poll(() => pixels(0.5)).toBeGreaterThan(0);
+  expect(await pixels(0.3)).toBe(0);
+  await page.evaluate(() => window.dispatchEvent(new Event("enable-test-microphone")));
+  await expect.poll(() => pixels(0.3)).toBeGreaterThan(0);
 
   /* 停止したら本物のクリップに差し替わる。仮のものが残って二重にならない。 */
   await page.getByRole("button", { name: "録音を停止", exact: true }).click();
