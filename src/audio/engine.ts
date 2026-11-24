@@ -1,3 +1,4 @@
+import { MAX_PITCH_SECONDS } from "../lib/pitch";
 import { playComparison, prepareComparison, type CompareSide } from "./comparison";
 import { encodeMp3InWorker } from "./mp3";
 import {
@@ -1486,6 +1487,26 @@ export class Engine {
     /* 開いたパネルと選択を食い違わせない（#79）。閉じるときは選択に触らない。 */
     if (this.fxId) this.selectedId = id;
     this.emit();
+  }
+
+  copyPitchPhrase(id: string) {
+    const t = this.find(id);
+    if (!t || !this.loop) return null;
+    const start = Math.max(this.loop.start, t.offset);
+    const end = Math.min(this.loop.end, start + MAX_PITCH_SECONDS, t.offset + t.trimEnd - t.trimStart);
+    if (end <= start) return null;
+    const sampleRate = t.buf.sampleRate;
+    const first = Math.round((start - t.offset + t.trimStart) * sampleRate);
+    const last = Math.round((end - t.offset + t.trimStart) * sampleRate);
+    // A phase-inverted stereo recording can cancel if summed. Analyze its strongest channel.
+    let strongest = 0, bestEnergy = -1;
+    for (let ch = 0; ch < t.buf.numberOfChannels; ch++) {
+      const data = t.buf.getChannelData(ch);
+      let energy = 0;
+      for (let i = first; i < Math.min(last, data.length); i += 8) energy += data[i] ** 2;
+      if (energy > bestEnergy) { strongest = ch; bestEnergy = energy; }
+    }
+    return { pcm: t.buf.getChannelData(strongest).slice(first, last), sampleRate, start };
   }
 
   private clearRoom(t: Track): void {

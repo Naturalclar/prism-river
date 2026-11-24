@@ -87,8 +87,19 @@ export async function stretchPcm(
   sampleRate: number,
   params: StretchParams,
 ): Promise<Float32Array<ArrayBuffer>[]> {
+  return processPcm(wasm, channels, sampleRate, normalizeStretch(params));
+}
+
+/** Fractional, strength-limited shift for the offline phrase listening study. */
+export function shiftPhrasePcm(wasm: WebAssembly.Module, channels: readonly Float32Array[],
+  sampleRate: number, cents: number) {
+  if (!Number.isFinite(cents)) throw new Error("Invalid pitch offset");
+  return processPcm(wasm, channels, sampleRate, { tempo: 1, semitones: clamp(cents, -25, 25) / 100 });
+}
+
+async function processPcm(wasm: WebAssembly.Module, channels: readonly Float32Array[],
+  sampleRate: number, p: StretchParams): Promise<Float32Array<ArrayBuffer>[]> {
   if (!channels.length) throw new Error("チャンネルがありません");
-  const p = normalizeStretch(params);
   const n = channels[0].length;
   const outLength = stretchedLength(n, p);
 
