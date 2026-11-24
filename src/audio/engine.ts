@@ -781,7 +781,12 @@ export class Engine {
       this.say(`${f.name} の読み込みをやめました。今のトラックはそのままです。`);
       return;
     }
-    await this.importProject(r.meta, r.blobs);
+    try {
+      await this.importProject(r.meta, r.blobs);
+    } catch (err) {
+      this.say(`${f.name} を開けませんでした: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
     this.say(
       `${f.name} を開きました（トラック ${r.meta.tracks.length} 本 / 保存日時 ${new Date(r.meta.savedAt).toLocaleString()}）。`,
     );
@@ -824,11 +829,8 @@ export class Engine {
        ここで待つと許可が下りるまで進まず、復元そのものが止まる。デコードは
        suspended のままでもできるし、再生時は play() が resume する。 */
     if (ctx.state === "suspended") void ctx.resume();
-    this.halt(true);
-    this.seekAt = 0;
-    this.loop = null;
-    while (this.tracks.length) this.remove(this.tracks[0].id);
-
+    // デコードやストレッチの待機中は、画面と自動保存が現在の完全なプロジェクトを参照する。
+    const prepared = [];
     for (let i = 0; i < meta.tracks.length; i++) {
       const m = meta.tracks[i];
       this.say(`復元中: ${m.srcName} …`);
@@ -861,19 +863,25 @@ export class Engine {
       // oxlint-disable-next-line no-await-in-loop
       const buf = await decoding;
       const ms = performance.now() - t0;
+      const stretch = normalizeStretch(m.stretch);
+      // oxlint-disable-next-line no-await-in-loop
+      const stretched = isIdentity(stretch) ? null : await stretchInWorker(ctx, buf, stretch);
+      prepared.push({ m, blob: blobs[i], buf, ms, drums, roll, stretch, stretched });
+    }
+
+    this.halt(true);
+    this.seekAt = 0;
+    this.loop = null;
+    while (this.tracks.length) this.remove(this.tracks[0].id);
+    for (const { m, blob, buf, ms, drums, roll, stretch, stretched } of prepared) {
       this.decodeTotal += ms;
-      const t = this.push(m.name, m.srcName, blobs[i], buf, ms);
+      const t = this.push(m.name, m.srcName, blob, buf, ms);
       t.midiChannel = m.midiChannel ?? null;
       t.drums = drums;
       t.roll = roll;
       /* ストレッチはトリムより先にかける（#25）。保存されているトリム・フェードは
          ストレッチ後の秒数なので、順序を逆にすると二重に伸縮する。 */
-      const stretch = normalizeStretch(m.stretch);
-      if (!isIdentity(stretch)) {
-        // oxlint-disable-next-line no-await-in-loop
-        const r = await stretchInWorker(ctx, t.rawBuf, stretch);
-        this.putStretched(t, r.buf, stretch, false);
-      }
+      if (stretched) this.putStretched(t, stretched.buf, stretch, false);
       t.vol = clamp(m.vol, 0, 1.4);
       t.panv = clamp(m.panv, -1, 1);
       t.pan.pan.value = t.panv;
