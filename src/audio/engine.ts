@@ -138,6 +138,7 @@ export class Engine {
   private tracks: Track[] = [];
   /** 録音セッション。マイクのストリームと入力レベル用のアナライザを持つ。 */
   private rec: RecSession | null = null;
+  private openingMic = false;
   private recRaf = 0;
   private recCount = 0;
   /** 録音を始めたタイムライン上の位置（秒）。トラック化のとき offset に入れる（#64）。 */
@@ -270,6 +271,7 @@ export class Engine {
       bouncing: this.bouncing,
       exporting: this.exporting,
       recording: this.rec !== null,
+      openingMic: this.openingMic,
       recTake: this.take !== null,
       midiRecording: this.midiIn !== null,
       webmBusy: this.webmBusy,
@@ -1129,8 +1131,17 @@ export class Engine {
   }
 
   private async startRecording(): Promise<void> {
-    if (this.rec) return;
-    const res = await openMic(this.audio(), () => void this.finishRecording());
+    if (this.rec || this.openingMic) return;
+    this.openingMic = true;
+    this.say("マイクを準備しています …");
+    let res;
+    try {
+      res = await openMic(this.audio(), () => void this.finishRecording());
+    } catch (err) {
+      res = { error: `録音を開始できませんでした: ${err instanceof Error ? err.message : String(err)}` };
+    } finally {
+      this.openingMic = false;
+    }
     if ("error" in res) {
       this.say(res.error);
       return;

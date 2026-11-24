@@ -19,6 +19,8 @@ export async function openMic(
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
     return { error: "このブラウザではマイク録音（getUserMedia / MediaRecorder）が使えません。" };
   }
+  // オーディオ時計の再開待ちに、入力だけが開いたままにならないようにする。
+  if (ctx.state === "suspended") await ctx.resume();
   let stream: MediaStream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -36,25 +38,29 @@ export async function openMic(
     return { error: `マイクを開けませんでした: ${err instanceof Error ? err.message : String(err)}` };
   }
 
-  if (ctx.state === "suspended") void ctx.resume();
-  /* 入力レベルの監視用。出力へは繋がない（スピーカーへ返すとハウリングする）。 */
-  const source = ctx.createMediaStreamSource(stream);
-  const analyser = ctx.createAnalyser();
-  analyser.fftSize = 256;
-  source.connect(analyser);
+  let source: MediaStreamAudioSourceNode | undefined;
+  try {
+    /* 入力レベルの監視用。出力へは繋がない（スピーカーへ返すとハウリングする）。 */
+    source = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    source.connect(analyser);
 
-  const recorder = new MediaRecorder(stream);
-  const chunks: Blob[] = [];
-  recorder.addEventListener("dataavailable", (e) => {
-    if (e.data.size) chunks.push(e.data);
-  });
-  /* ボタンからの停止も、デバイス切断などによる予期しない停止もここで受ける。 */
-  recorder.addEventListener("stop", onStop, { once: true });
-  recorder.start();
-
-  return {
-    rec: { stream, recorder, chunks, source, analyser, buf: new Uint8Array(analyser.fftSize) },
-  };
+    const recorder = new MediaRecorder(stream);
+    const chunks: Blob[] = [];
+    recorder.addEventListener("dataavailable", (e) => {
+      if (e.data.size) chunks.push(e.data);
+    });
+    /* ボタンからの停止も、デバイス切断などによる予期しない停止もここで受ける。 */
+    recorder.addEventListener("stop", onStop, { once: true });
+    const rec = { stream, recorder, chunks, source, analyser, buf: new Uint8Array(analyser.fftSize) };
+    recorder.start();
+    return { rec };
+  } catch (err) {
+    for (const track of stream.getTracks()) track.stop();
+    source?.disconnect();
+    throw err;
+  }
 }
 
 /** 停止後の後始末。エンコード済みチャンクをまとめて返す。 */

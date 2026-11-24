@@ -135,3 +135,60 @@ test("マイクの権限が拒否されたら分かるメッセージが出る",
   /* afterEach の「ページ例外ゼロ」も検証対象: reject を握り損ねると
      unhandled rejection がここで出る。 */
 });
+
+test("許可待ちの連打をまとめ、拒否後の再試行で取得した入力を停止時に解放する", async ({ page }) => {
+  const tracks = await page.evaluateHandle(() => {
+    const devices = navigator.mediaDevices;
+    const get = devices.getUserMedia.bind(devices);
+    const opened: MediaStreamTrack[] = [];
+    let requests = 0;
+    devices.getUserMedia = async (constraints) => {
+      const attempt = ++requests;
+      document.documentElement.dataset.micRequests = String(attempt);
+      await new Promise<void>((resolve) => window.addEventListener("answer-mic", () => resolve(), { once: true }));
+      if (attempt === 1) throw new DOMException("denied", "NotAllowedError");
+      const stream = await get(constraints);
+      opened.push(...stream.getAudioTracks());
+      return stream;
+    };
+    return opened;
+  });
+  const mic = page.getByRole("button", { name: "マイクから録音", exact: true });
+  const answer = () => page.evaluate(() => window.dispatchEvent(new Event("answer-mic")));
+  await mic.dblclick();
+  await expect(page.locator("html")).toHaveAttribute("data-mic-requests", "1");
+  await answer();
+  await expect(page.getByTestId("log")).toContainText("許可されませんでした");
+  await mic.dblclick();
+  await expect(page.locator("html")).toHaveAttribute("data-mic-requests", "2");
+  await answer();
+  await expect(page.getByTestId("rec-clip")).toBeVisible();
+  await expect.poll(() => page.getByTestId("rec-clip").evaluate(el => el.getBoundingClientRect().width)).toBeGreaterThan(20);
+  await page.getByRole("button", { name: "録音を停止", exact: true }).click();
+  await expect(page.getByTestId("track-head")).toHaveCount(1);
+  expect(await tracks.evaluate(all => all.map(t => t.readyState))).toEqual(["ended"]);
+});
+
+test("録音開始に失敗しても取得済みのマイクを解放できる", async ({ page }) => {
+  const tracks = await page.evaluateHandle(() => {
+    const devices = navigator.mediaDevices;
+    const get = devices.getUserMedia.bind(devices);
+    const opened: MediaStreamTrack[] = [];
+    devices.getUserMedia = async (constraints) => {
+      const stream = await get(constraints);
+      opened.push(...stream.getTracks());
+      return stream;
+    };
+    const start = MediaRecorder.prototype.start;
+    MediaRecorder.prototype.start = function () {
+      MediaRecorder.prototype.start = start;
+      throw new Error("recorder start failed");
+    };
+    return opened;
+  });
+  const mic = page.getByRole("button", { name: "マイクから録音", exact: true });
+  await mic.click();
+  await expect(page.getByTestId("log")).toContainText("recorder start failed");
+  expect(await tracks.evaluate(all => all.map(t => t.readyState))).toEqual(["ended"]);
+  await expect(mic).toBeEnabled();
+});
