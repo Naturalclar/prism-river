@@ -170,6 +170,7 @@ export type Snapshot = {
   recTake: boolean;
   /** MIDI 実機入力の録音中（#56）。マイク録音とは独立。 */
   midiRecording: boolean;
+  openingMidi: boolean;
   /** webm の実時間書き出し中。 */
   webmBusy: boolean;
   /** MP3（WASM）の書き出し中。 */

@@ -10,6 +10,7 @@ import { expect, test, wavWindowPeak } from "./helpers";
 declare global {
   interface Window {
     midiFire?: (data: number[]) => void;
+    midiListenerCount?: () => number;
   }
 }
 
@@ -27,6 +28,7 @@ async function fakeMidi(page: import("@playwright/test").Page) {
         listeners.delete(fn);
       },
     };
+    window.midiListenerCount = () => listeners.size;
     window.midiFire = (data: number[]) => {
       for (const fn of listeners) {
         fn({ data: new Uint8Array(data), timeStamp: performance.now() });
@@ -126,4 +128,34 @@ test("MIDI 入力デバイスが無いときは繋いでからと伝える", asy
   await page.getByRole("button", { name: "MIDI キーボードから録音", exact: true }).click();
   await expect(page.getByTestId("log")).toContainText("MIDI 入力デバイスが見つかりませんでした");
   await expect(page.getByTestId("track-head")).toHaveCount(0);
+});
+
+test("MIDI許可待ちの連打は1要求になり、拒否後の再試行と停止で購読が残らない", async ({ page }) => {
+  await fakeMidi(page);
+  await page.evaluate(() => {
+    const request = navigator.requestMIDIAccess.bind(navigator);
+    let attempts = 0;
+    navigator.requestMIDIAccess = async () => {
+      const attempt = ++attempts;
+      document.documentElement.dataset.midiRequests = String(attempt);
+      await new Promise<void>(resolve => window.addEventListener("answer-midi", () => resolve(), { once: true }));
+      if (attempt === 1) throw new DOMException("denied", "NotAllowedError");
+      return request();
+    };
+  });
+  const start = page.getByRole("button", { name: "MIDI キーボードから録音", exact: true });
+  const answer = () => page.evaluate(() => window.dispatchEvent(new Event("answer-midi")));
+  await start.dblclick();
+  await expect(page.locator("html")).toHaveAttribute("data-midi-requests", "1");
+  await answer();
+  await expect(page.getByTestId("log")).toContainText("許可されませんでした");
+  await start.dblclick();
+  await expect(page.locator("html")).toHaveAttribute("data-midi-requests", "2");
+  await answer();
+  const stop = page.getByRole("button", { name: "MIDI 録音を停止", exact: true });
+  await expect(stop).toBeVisible();
+  expect(await page.evaluate(() => window.midiListenerCount?.())).toBe(1);
+  await stop.click();
+  await expect(start).toBeEnabled();
+  expect(await page.evaluate(() => window.midiListenerCount?.())).toBe(0);
 });
