@@ -295,16 +295,14 @@ export class Engine {
     this.loop = clampLoop(this.loop, this.total());
     this.invalidateRender();
     this.emit();
+    this.notifyProjectChanged();
+  }
+
+  private notifyProjectChanged(): void {
     for (const fn of this.touchListeners) fn();
   }
 
-  /**
-   * 音に効く変更（`touched()`）だけの購読。自動保存（#80）が使う。
-   *
-   * `subscribe()` と分けているのは、選択・ズーム・パネルの開閉でも保存が走ると
-   * 意味の無い書き込みが増えるため。「音に効くなら touched()」の区別（#49）が
-   * そのまま「保存に値する変更か」の区別になっている。
-   */
+  /** 保存対象の編集を自動保存などの購読者に通知する。 */
   onTouched = (fn: () => void): (() => void) => {
     this.touchListeners.add(fn);
     return () => this.touchListeners.delete(fn);
@@ -1298,7 +1296,7 @@ export class Engine {
     t.bus = bus;
     this.routeTrack(t);
     this.invalidateRender();
-    /* say() が emit まで面倒を見るので、ここは捨てるだけでよい。 */
+    this.notifyProjectChanged();
     this.say(
       bus
         ? `${t.name} → ${BUS_INFO[bus].label}バス（${BUS_INFO[bus].sister}）`
@@ -1854,8 +1852,7 @@ export class Engine {
     } else {
       this.say("ループ範囲を解除しました（全体を繰り返します）。");
     }
-    /* 音そのものは変わらない（書き出しは全体のまま）ので emit で足りる。 */
-    this.emit();
+    this.notifyProjectChanged();
     return this.loop;
   }
 
@@ -1864,7 +1861,7 @@ export class Engine {
     if (!this.loop) return;
     this.loop = null;
     this.say("ループ範囲を解除しました（全体を繰り返します）。");
-    this.emit();
+    this.notifyProjectChanged();
   }
 
   /**
