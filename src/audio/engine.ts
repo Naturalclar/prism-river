@@ -1848,7 +1848,9 @@ export class Engine {
     return this.bouncing || this.webmBusy || this.mp3Busy;
   }
 
-  async bounce(): Promise<void> {
+  async bounce(scope: "mix" | "selection" = "mix"): Promise<void> {
+    const range = scope === "selection" ? this.loop : null;
+    if (scope === "selection" && !range) return;
     const dur = this.total();
     if (!dur || this.exporting) return;
     this.audio();
@@ -1859,14 +1861,25 @@ export class Engine {
        落ちることが現実にあり、ここで戻さないと書き出しボタンが死んだままになる。 */
     try {
       const { rendered, ms } = await this.renderMix(dur);
-      const wav = encodeWav(rendered);
+      let output = rendered;
+      if (range) {
+        const sr = rendered.sampleRate;
+        const start = Math.round(range.start * sr);
+        const end = Math.round(range.end * sr);
+        output = this.audio().createBuffer(rendered.numberOfChannels, end - start, sr);
+        for (let ch = 0; ch < rendered.numberOfChannels; ch++) {
+          output.getChannelData(ch).set(rendered.getChannelData(ch).subarray(start, end));
+        }
+        this.lastRender = output;
+      }
+      const wav = encodeWav(output);
       const rt = (dur / (ms / 1000)).toFixed(0);
       const size = (wav.size / 1048576).toFixed(1);
       this.say(
-        `レンダー完了: ${dur.toFixed(2)}s / ${size}MB / 実時間の約${rt}倍速。保存を試みています …`,
+        `レンダー完了: ${output.duration.toFixed(2)}s / ${size}MB / 実時間の約${rt}倍速。保存を試みています …`,
       );
 
-      await deliverWav(wav, rt, size, (m) => this.say(m));
+      await deliverWav(wav, rt, size, (m) => this.say(m), range ? "prism-river-selection.wav" : undefined);
     } catch (err) {
       this.say(`書き出しに失敗しました: ${err instanceof Error ? err.message : String(err)}`);
     } finally {

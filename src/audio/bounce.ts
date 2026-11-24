@@ -149,12 +149,13 @@ export async function deliverWav(
   rt: string,
   size: string,
   say: (m: string) => void,
+  filename = "prism-river-mix.wav",
 ): Promise<void> {
   if (!window.claude) {
     const url = URL.createObjectURL(wav);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "prism-river-mix.wav";
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -176,7 +177,7 @@ export async function deliverWav(
     return;
   }
   try {
-    await dl.save({ filename: "prism-river-mix.wav", data: wav });
+    await dl.save({ filename, data: wav });
     say(`保存しました。レンダーは実時間の約${rt}倍速（${size}MB）。`);
   } catch (err) {
     const code = (err as { code?: string } | null)?.code;

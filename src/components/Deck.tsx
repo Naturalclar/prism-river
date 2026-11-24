@@ -194,6 +194,12 @@ export function Deck({
         >
           ミックスを書き出す
         </button>
+        {snap.loop && (
+          <button className="ghost" disabled={idle || snap.exporting}
+            onClick={() => void engine.bounce("selection")}>
+            選択範囲をWAVで書き出す（{snap.loop.start.toFixed(2)}–{snap.loop.end.toFixed(2)} 秒）
+          </button>
+        )}
         <button
           className="ghost"
           disabled={idle || snap.exporting}
