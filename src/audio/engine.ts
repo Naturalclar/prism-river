@@ -161,6 +161,7 @@ export class Engine {
   private nextHue = 0;
   private masterVol = DEFAULT_MASTER_VOL;
   private lastRender: AudioBuffer | null = null;
+  private mixRevision = 0;
   private selectedId: string | null = null;
   private fxId: string | null = null;
   private drumsId: string | null = null;
@@ -313,6 +314,7 @@ export class Engine {
    * （レンダーは尺に比例するので、押されたときだけでよい）。
    */
   private invalidateRender(): void {
+    this.mixRevision++;
     this.cancelComparison();
     if (!this.lastRender) return;
     this.lastRender = null;
@@ -1932,18 +1934,7 @@ export class Engine {
     /* 失敗しても bouncing を必ず戻す。長尺では encodeWav のメモリ確保が
        落ちることが現実にあり、ここで戻さないと書き出しボタンが死んだままになる。 */
     try {
-      const { rendered, ms } = await this.renderMix(dur);
-      let output = rendered;
-      if (range) {
-        const sr = rendered.sampleRate;
-        const start = Math.round(range.start * sr);
-        const end = Math.round(range.end * sr);
-        output = this.audio().createBuffer(rendered.numberOfChannels, end - start, sr);
-        for (let ch = 0; ch < rendered.numberOfChannels; ch++) {
-          output.getChannelData(ch).set(rendered.getChannelData(ch).subarray(start, end));
-        }
-        this.lastRender = output;
-      }
+      const { rendered: output, ms } = await this.renderMix(dur, range);
       const wav = encodeWav(output);
       const rt = (dur / (ms / 1000)).toFixed(0);
       const size = (wav.size / 1048576).toFixed(1);
@@ -1960,12 +1951,24 @@ export class Engine {
     }
   }
 
-  /** ミックスをオフラインで一括レンダーして lastRender に置く。WAV / webm / MP3 共用。 */
-  private async renderMix(dur: number): Promise<{ rendered: AudioBuffer; ms: number }> {
-    const { rendered, ms } = await renderMix(this.audio(), this.tracks, this.masterVol, this.busVol, dur);
+  /** 書き出しは開始時の音を使い、試聴には現在の編集内容と一致する結果だけを残す。 */
+  private async renderMix(dur: number, range: LoopRange | null = null): Promise<{ rendered: AudioBuffer; ms: number }> {
+    const revision = this.mixRevision;
+    const ctx = this.audio();
+    const { rendered, ms } = await renderMix(ctx, this.tracks, this.masterVol, this.busVol, dur);
+    let output = rendered;
+    if (range) {
+      const sr = rendered.sampleRate;
+      const start = Math.round(range.start * sr);
+      const end = Math.round(range.end * sr);
+      output = ctx.createBuffer(rendered.numberOfChannels, end - start, sr);
+      for (let ch = 0; ch < rendered.numberOfChannels; ch++) {
+        output.getChannelData(ch).set(rendered.getChannelData(ch).subarray(start, end));
+      }
+    }
     this.telemetry = { ...this.telemetry, offline: `${ms.toFixed(0)} ms`, offlineOk: true };
-    this.lastRender = rendered;
-    return { rendered, ms };
+    if (revision === this.mixRevision) this.lastRender = output;
+    return { rendered: output, ms };
   }
 
   /**
