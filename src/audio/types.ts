@@ -163,11 +163,10 @@ export type Snapshot = {
   recording: boolean;
   openingMic: boolean;
   /**
-   * 録音中の仮クリップを出しているか（#63）。レーンの出し入れは構造の変化なので
-   * React が見るが、**中身（伸びていく幅と振幅）は DOM 直書き**で、ここには来ない。
-   * 停止後もデコードが終わるまでは true のまま——本物と差し替わるのがそのとき。
+   * 仮クリップのテイク番号。次の録音に切り替わったらキャンバスも作り直す。
+   * 幅と振幅は DOM へ直接描く。停止後はデコード完了まで同じ番号を保つ。
    */
-  recTake: boolean;
+  recTakeId: number | null;
   /** MIDI 実機入力の録音中（#56）。マイク録音とは独立。 */
   midiRecording: boolean;
   openingMidi: boolean;

@@ -64,9 +64,9 @@ export function Reel({ snap }: { snap: Snapshot }) {
           </div>
         ))}
         {/* 録音中の仮レーン（#63）。トラックになったら消えて、本物のレーンに変わる。 */}
-        {snap.recTake && (
+        {snap.recTakeId !== null && (
           <div className="lane" data-testid="rec-lane">
-            <RecClip pxPerSec={snap.pxPerSec} />
+            <RecClip key={snap.recTakeId} pxPerSec={snap.pxPerSec} />
           </div>
         )}
       </div>
@@ -74,7 +74,7 @@ export function Reel({ snap }: { snap: Snapshot }) {
       <Needle reel={reel} pxPerSec={snap.pxPerSec} visible={snap.tracks.length > 0} />
 
       {/* 1本も無いところから録り始めたときは、案内より仮クリップを見せる（#63）。 */}
-      {snap.tracks.length === 0 && !snap.recTake && (
+      {snap.tracks.length === 0 && snap.recTakeId === null && (
         <div className="blank">
           <strong>音声ファイルをここへドロップ</strong>
           <span>
