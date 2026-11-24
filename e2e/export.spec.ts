@@ -144,3 +144,43 @@ test("MP3 で書き出すと WASM エンコードの計測値が出る", async (
   await expect(page.getByTestId("probe-mp3")).toContainText("ms");
   await expect(page.getByTestId("probe-mp3")).toContainText("倍速");
 });
+
+for (const format of ["WAV", "選択WAV", "MP3", "webm"] as const) {
+  test(`${format}のレンダー中に編集しても古い試聴結果が復活しない`, async ({ page }) => {
+    await load(page, [makeTone("revision.wav", 440, 1)]);
+    if (format === "選択WAV") {
+      const ruler = await page.getByTestId("ruler").boundingBox();
+      if (!ruler) throw new Error("ruler not found");
+      await page.mouse.move(ruler.x + 14, ruler.y + 8);
+      await page.mouse.down();
+      await page.mouse.move(ruler.x + 56, ruler.y + 8, { steps: 4 });
+      await page.mouse.up();
+    }
+    // Hold only the first render's completion, after the actual graph has rendered.
+    await page.evaluate(() => {
+      const render = OfflineAudioContext.prototype.startRendering;
+      OfflineAudioContext.prototype.startRendering = async function () {
+        OfflineAudioContext.prototype.startRendering = render;
+        const buf = await render.call(this);
+        document.documentElement.dataset.renderReady = "true";
+        await new Promise<void>((resolve) => window.addEventListener("release-render", () => resolve(), { once: true }));
+        return buf;
+      };
+    });
+    const names = { WAV: "ミックスを書き出す", "選択WAV": /選択範囲をWAV/, MP3: /MP3 で書き出す/, webm: /webm で書き出す/ };
+    const button = page.getByRole("button", { name: names[format] });
+    const first = page.waitForEvent("download");
+    await button.click();
+    await expect(page.locator("html")).toHaveAttribute("data-render-ready", "true");
+    await setRange(page, "#mVol", 0);
+    await page.evaluate(() => window.dispatchEvent(new Event("release-render")));
+    await first;
+    await expect(button).toBeEnabled();
+    const audition = page.getByRole("button", { name: "レンダーを試聴" });
+    await expect(audition).toHaveCount(0);
+    const next = page.waitForEvent("download");
+    await page.getByRole("button", { name: "ミックスを書き出す", exact: true }).click();
+    await next;
+    await expect(audition).toBeVisible();
+  });
+}
