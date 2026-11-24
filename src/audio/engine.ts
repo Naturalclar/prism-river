@@ -1,3 +1,4 @@
+import { playComparison, prepareComparison, type CompareSide } from "./comparison";
 import { encodeMp3InWorker } from "./mp3";
 import {
   decodeDrumPattern,
@@ -119,6 +120,10 @@ const DEFAULT_PX_PER_SEC = 70;
 export class Engine {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
+  private monitor: GainNode | null = null;
+  private compare: Snapshot["compare"] = null;
+  private comparison: ReturnType<typeof playComparison> | null = null;
+  private compareGeneration = 0;
   /** グループバス。トラックは pan → busGain → master。作成は audio() で。 */
   private busGain: Record<BusId, GainNode> | null = null;
   private busVol: BusVols = { strings: 1, winds: 1, keys: 1 };
@@ -259,6 +264,7 @@ export class Engine {
       message: this.message,
       hasRender: this.lastRender !== null,
       auditioning: this.auditionSrc !== null,
+      compare: this.compare,
       bouncing: this.bouncing,
       exporting: this.exporting,
       recording: this.rec !== null,
@@ -308,6 +314,7 @@ export class Engine {
    * （レンダーは尺に比例するので、押されたときだけでよい）。
    */
   private invalidateRender(): void {
+    this.cancelComparison();
     if (!this.lastRender) return;
     this.lastRender = null;
     this.stopAudition();
@@ -327,10 +334,13 @@ export class Engine {
     const aR = ctx.createAnalyser();
     aL.fftSize = 256;
     aR.fftSize = 256;
-    master.connect(splitter);
+    const monitor = ctx.createGain();
+    this.monitor = monitor;
+    master.connect(monitor);
+    monitor.connect(splitter);
     splitter.connect(aL, 0);
     splitter.connect(aR, 1);
-    master.connect(ctx.destination);
+    monitor.connect(ctx.destination);
 
     /* グループバス3系統。将来のバスエフェクト（#12 と同型）は
        busGain と master の間に挿す。 */
@@ -579,6 +589,7 @@ export class Engine {
   /** クリックでの選択。`null` で解除。トグルは呼び出し側が行う。 */
   select(id: string | null): void {
     if (this.selectedId === id) return;
+    this.cancelComparison();
     this.selectedId = id;
     this.followSelection();
     this.emit();
@@ -1470,6 +1481,7 @@ export class Engine {
   /* ── エフェクト ────────────────────────────────────────────────────── */
 
   toggleFxPanel(id: string): void {
+    this.cancelComparison();
     this.fxId = this.fxId === id ? null : id;
     /* 開いたパネルと選択を食い違わせない（#79）。閉じるときは選択に触らない。 */
     if (this.fxId) this.selectedId = id;
@@ -1724,6 +1736,8 @@ export class Engine {
   }
 
   play(): void {
+    this.cancelComparison();
+    this.stopAudition();
     if (!this.tracks.length) return;
     const ctx = this.audio();
     if (ctx.state === "suspended") void ctx.resume();
@@ -1777,12 +1791,15 @@ export class Engine {
   }
 
   stop(): void {
+    this.cancelComparison();
+    this.stopAudition();
     this.halt(true);
     this.seekAt = 0;
     this.emitFrame();
   }
 
   seek(sec: number): void {
+    this.cancelComparison();
     if (!this.playing) for (const t of this.tracks) this.clearRoom(t);
     this.seekAt = Math.max(0, Math.min(this.total(), sec));
     if (this.playing) {
@@ -1808,6 +1825,7 @@ export class Engine {
    * そのまま（区間だけ外して全体ループに戻せる）。
    */
   setLoop(a: number, b: number): LoopRange | null {
+    this.cancelComparison();
     this.loop = makeLoop(a, b, this.total());
     if (this.loop) {
       this.looping = true;
@@ -1821,6 +1839,7 @@ export class Engine {
   }
 
   clearLoop(): void {
+    this.cancelComparison();
     if (!this.loop) return;
     this.loop = null;
     this.say("ループ範囲を解除しました（全体を繰り返します）。");
@@ -2002,8 +2021,53 @@ export class Engine {
     }
   }
 
+  private cancelComparison(): void {
+    if (this.compare === null) return;
+    this.compareGeneration++;
+    this.comparison?.stop();
+    this.comparison = null;
+    this.compare = null;
+    this.emit();
+  }
+
+  stopComparison(): void {
+    this.cancelComparison();
+  }
+
+  switchComparison(side: CompareSide): void {
+    if (!this.comparison) return;
+    this.comparison.select(side);
+    this.compare = side;
+    this.emit();
+  }
+
+  async compareFx(id: string): Promise<void> {
+    const range = this.loop;
+    if (!range || !this.find(id) || this.exporting || this.compare) return;
+    const ctx = this.audio();
+    this.halt();
+    this.stopAudition();
+    const generation = ++this.compareGeneration;
+    this.compare = "preparing";
+    this.say("選択範囲のA/Bを準備中 …");
+    try {
+      if (ctx.state === "suspended") await ctx.resume();
+      if (generation !== this.compareGeneration) return;
+      const pair = await prepareComparison(ctx, this.tracks, this.masterVol, this.busVol, id, range);
+      if (generation !== this.compareGeneration || !this.monitor) return;
+      this.comparison = playComparison(ctx, this.monitor, pair);
+      this.compare = "A";
+      this.say("同音量で比較中（A: 選択トラックのFXなし / B: FXあり）");
+    } catch (err) {
+      if (generation !== this.compareGeneration) return;
+      this.cancelComparison();
+      this.say(`A/Bの準備に失敗しました: ${String(err)}`);
+    }
+  }
+
   audition(): void {
-    if (!this.lastRender || !this.ctx || !this.master) return;
+    if (!this.lastRender || !this.ctx || !this.monitor) return;
+    this.cancelComparison();
     if (this.auditionSrc) {
       this.stopAudition();
       this.emit();
@@ -2012,11 +2076,12 @@ export class Engine {
     this.halt(true);
     const s = this.ctx.createBufferSource();
     s.buffer = this.lastRender;
-    s.connect(this.master);
+    s.connect(this.monitor);
     s.start();
     s.addEventListener(
       "ended",
       () => {
+        if (this.auditionSrc !== s) return;
         this.auditionSrc = null;
         this.emit();
       },

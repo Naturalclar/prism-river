@@ -156,6 +156,7 @@ export type Snapshot = {
   message: string;
   hasRender: boolean;
   auditioning: boolean;
+  compare: "preparing" | "A" | "B" | null;
   bouncing: boolean;
   /** WAV / webm / MP3 のどれかが走っている。書き出しは同時に1つだけ（#51）。 */
   exporting: boolean;

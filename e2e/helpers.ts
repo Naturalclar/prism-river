@@ -142,7 +142,13 @@ export async function canvasPixelSum(page: Page, selector: string, atRow = 0.5):
 export async function captureSpeakers(page: Page) {
   await page.addInitScript(() => {
     const chunks: Float32Array[] = [];
-    Object.assign(window, { speakerChunks: chunks });
+    const loopStarts: number[] = [];
+    Object.assign(window, { speakerChunks: chunks, loopStarts });
+    const start = AudioBufferSourceNode.prototype.start;
+    AudioBufferSourceNode.prototype.start = function (...args) {
+      if (this.loop) loopStarts.push(args[0] ?? 0);
+      return start.apply(this, args);
+    };
     const tapped = new WeakSet<AudioNode>();
     const connect = AudioNode.prototype.connect;
     AudioNode.prototype.connect = new Proxy(connect, {
