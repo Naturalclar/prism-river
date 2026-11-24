@@ -1,3 +1,4 @@
+import { MAX_COMPARE_SECONDS } from "../audio/comparison";
 import { engine } from "../audio/instance";
 import type { Snapshot } from "../audio/engine";
 
@@ -42,6 +43,23 @@ export function FxPanel({ snap }: { snap: Snapshot }) {
         >
           ✕
         </button>
+      </div>
+
+      <div className="fx-top">
+        {snap.compare === null ? (
+          <button disabled={!snap.loop || snap.exporting} onClick={() => void engine.compareFx(t.id)}
+            title="ルーラーで比較する区間を指定">
+            {snap.loop ? `FXをA/B比較（先頭から最大${MAX_COMPARE_SECONDS}秒）` : "A/B比較には範囲を選択"}
+          </button>
+        ) : (
+          <>
+            {(["A", "B"] as const).map((side) => (
+              <button key={side} disabled={snap.compare === "preparing"} aria-pressed={snap.compare === side}
+                onClick={() => engine.switchComparison(side)}>{side === "A" ? "A: FXなし" : "B: FXあり"}</button>
+            ))}
+            <button onClick={() => engine.stopComparison()}>比較を停止</button>
+          </>
+        )}
       </div>
 
       {BANDS.map(([band, label]) => (

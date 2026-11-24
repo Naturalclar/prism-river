@@ -1,6 +1,7 @@
+import { encodeWavBytes } from "../src/lib/wav";
 import { readFileSync } from "node:fs";
 import type { Page } from "@playwright/test";
-import { expect, load, makeTone, setRange, test } from "./helpers";
+import { captureSpeakers, capturedSamples, expect, load, makeTone, setRange, test } from "./helpers";
 
 /** ループする範囲の指定（#88）。ルーラーの横ドラッグで区間を決める。 */
 
@@ -163,4 +164,50 @@ test("選択WAVは全体WAVの同じPCM区間と一致する", async ({ page }) 
   expect(cut.subarray(44).equals(full.subarray(44 + bytesPerSecond, 44 + 3 * bytesPerSecond))).toBe(true);
   await page.getByTestId("loop-clear").click();
   await expect(selected).toHaveCount(0);
+});
+
+test("FX比較は同時刻に始まる2音を同音量で切り替え、保存するPCMを変えない", async ({ page }) => {
+  await captureSpeakers(page);
+  const sr = 44100;
+  const steady = Float32Array.from({ length: sr * 4 }, (_, i) => 0.2 * Math.sin(2 * Math.PI * 90 * i / sr));
+  const bytes = encodeWavBytes({ length: steady.length, sampleRate: sr, numberOfChannels: 1, getChannelData: () => steady });
+  await page.getByTestId("picker").setInputFiles({ name: "level.wav", mimeType: "audio/wav", buffer: Buffer.from(bytes) });
+  await page.getByRole("button", { name: /のエフェクト$/ }).click();
+  await expect(page.getByRole("button", { name: /A.B比較には/ })).toBeDisabled();
+  await setRange(page, "#mVol", 0.4);
+  await setRange(page, "[data-testid=fx-low]", 12);
+  await dragRuler(page, 1, 3);
+  const downloadMix = async () => {
+    const dl = page.waitForEvent("download");
+    await page.getByRole("button", { name: "ミックスを書き出す", exact: true }).click();
+    return readFileSync((await (await dl).path())!);
+  };
+  const before = await downloadMix();
+  const rms = async () => {
+    await page.waitForTimeout(260);
+    const samples = (await capturedSamples(page)).slice(-4096);
+    return Math.sqrt(samples.reduce((sum, x) => sum + x * x, 0) / samples.length);
+  };
+  await page.getByRole("button", { name: /FXをA.B比較/ }).click();
+  await expect(page.getByRole("button", { name: "A: FXなし" })).toHaveAttribute("aria-pressed", "true");
+  const dry = await rms();
+  expect(dry).toBeGreaterThan(0.005);
+  await page.getByRole("button", { name: "B: FXあり" }).click();
+  const wet = await rms();
+  expect(Math.abs(20 * Math.log10(wet / dry))).toBeLessThan(0.75);
+  const starts = await page.evaluate(() => Reflect.get(window, "loopStarts") as number[]);
+  expect(starts).toHaveLength(2);
+  expect(starts[1]).toBe(starts[0]);
+  await page.getByRole("button", { name: "比較を停止" }).click();
+  expect((await downloadMix()).equals(before)).toBe(true);
+  // Compare the captured audition against the WAV sample level, with Master well below unity.
+  await page.getByRole("button", { name: "レンダーを試聴" }).click();
+  const preview = await rms();
+  let energy = 0;
+  for (let i = 0; i < 4096; i++) {
+    const pos = 44 + 4 * (sr + i);
+    const mono = (before.readInt16LE(pos) + before.readInt16LE(pos + 2)) / 65536;
+    energy += mono * mono;
+  }
+  expect(Math.abs(20 * Math.log10(preview / Math.sqrt(energy / 4096)))).toBeLessThan(0.75);
 });

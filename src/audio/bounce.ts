@@ -16,6 +16,7 @@ export async function renderMix(
   masterVol: number,
   busVol: BusVols,
   dur: number,
+  preview?: { origin: number; bypass?: string },
 ): Promise<{ rendered: AudioBuffer; ms: number }> {
   const t0 = performance.now();
   const sr = ctx.sampleRate;
@@ -24,7 +25,10 @@ export async function renderMix(
   const end = audible.reduce((latest, t) => (t.fx.room > 0
     ? Math.max(latest, t.offset + t.trimEnd - t.trimStart + ROOM_SECONDS)
     : latest), dur);
-  const off = new OfflineAudioContext(2, Math.ceil(end * sr) + Math.floor(sr * 0.1), sr);
+  const origin = preview?.origin ?? 0;
+  const frames = preview ? Math.round(dur * sr) - Math.round(origin * sr)
+    : Math.ceil(end * sr) + Math.floor(sr * 0.1);
+  const off = new OfflineAudioContext(2, frames, sr);
   const mg = off.createGain();
   mg.gain.value = masterVol;
   mg.connect(off.destination);
@@ -37,16 +41,19 @@ export async function renderMix(
     busG[bus] = g;
   }
   for (const t of audible) {
+    const eff = t.trimEnd - t.trimStart;
+    const clipAt = t.offset - origin;
+    const skip = Math.max(0, -clipAt);
+    if (skip >= eff || (preview && t.offset >= dur)) continue;
     const g = off.createGain();
     const p = off.createStereoPanner();
     const s = off.createBufferSource();
     g.gain.value = t.vol;
     p.pan.value = t.panv;
     s.buffer = t.buf;
-    const eff = t.trimEnd - t.trimStart;
     if (t.fadeIn > 0 || t.fadeOut > 0) {
       const f = off.createGain();
-      scheduleFades(f.gain, t.offset, eff, t.fadeIn, t.fadeOut);
+      scheduleFades(f.gain, clipAt, eff, t.fadeIn, t.fadeOut);
       s.connect(f);
       f.connect(g);
     } else {
@@ -54,16 +61,17 @@ export async function renderMix(
     }
     /* エフェクトはプレーンなデータからオフライン側のノードを組み直す。
        素通し（EQ 全バンド 0dB・コンプ OFF）のときは挟まない。 */
-    const chain = buildFxChain(off, t.fx);
+    const bypass = preview?.bypass === t.id;
+    const chain = bypass ? null : buildFxChain(off, t.fx);
     if (chain) {
       g.connect(chain.input);
       chain.output.connect(p);
     } else {
       g.connect(p);
     }
-    if (t.fx.room > 0) connectRoom(off, chain?.output ?? g, p, t.fx.room);
+    if (!bypass && t.fx.room > 0) connectRoom(off, chain?.output ?? g, p, t.fx.room);
     p.connect(t.bus ? busG[t.bus] : mg);
-    s.start(t.offset, t.trimStart, eff);
+    s.start(Math.max(0, clipAt), t.trimStart + skip, eff - skip);
   }
   const rendered = await off.startRendering();
   return { rendered, ms: performance.now() - t0 };
