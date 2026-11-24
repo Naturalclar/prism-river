@@ -161,6 +161,7 @@ export type Snapshot = {
   /** WAV / webm / MP3 のどれかが走っている。書き出しは同時に1つだけ（#51）。 */
   exporting: boolean;
   recording: boolean;
+  openingMic: boolean;
   /**
    * 録音中の仮クリップを出しているか（#63）。レーンの出し入れは構造の変化なので
    * React が見るが、**中身（伸びていく幅と振幅）は DOM 直書き**で、ここには来ない。

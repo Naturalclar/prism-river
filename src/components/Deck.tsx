@@ -83,6 +83,7 @@ export function Deck({
           className={`key${snap.recording ? " rec" : ""}`}
           title={snap.recording ? "録音を停止してトラックにする" : "マイクから録音"}
           aria-label={snap.recording ? "録音を停止" : "マイクから録音"}
+          disabled={snap.openingMic}
           aria-pressed={snap.recording}
           onClick={() => engine.toggleRecord()}
         >
