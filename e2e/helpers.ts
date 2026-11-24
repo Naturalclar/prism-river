@@ -175,3 +175,18 @@ export async function capturedSamples(page: Page) {
     return chunks.flatMap((chunk) => Array.from(chunk));
   });
 }
+
+/** 自動保存の完了を、ブラウザに確定したメタデータから確認する。 */
+export async function savedProject(page: Page): Promise<import("../src/lib/store").ProjectMeta | null> {
+  return page.evaluate(() => new Promise((resolve, reject) => {
+    const open = indexedDB.open("prism-river");
+    open.addEventListener("error", () => reject(open.error));
+    open.addEventListener("success", () => {
+      const db = open.result;
+      const req = db.transaction("project").objectStore("project").get("current");
+      req.addEventListener("success", () => resolve(req.result ? JSON.parse(req.result.json) : null));
+      req.addEventListener("error", () => reject(req.error));
+      db.close();
+    });
+  }));
+}

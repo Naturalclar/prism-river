@@ -1,7 +1,7 @@
 import { encodeWavBytes } from "../src/lib/wav";
 import { readFileSync } from "node:fs";
 import type { Page } from "@playwright/test";
-import { captureSpeakers, capturedSamples, expect, load, makeTone, setRange, test } from "./helpers";
+import { captureSpeakers, capturedSamples, expect, load, makeTone, savedProject, setRange, test } from "./helpers";
 
 /** ループする範囲の指定（#88）。ルーラーの横ドラッグで区間を決める。 */
 
@@ -232,18 +232,18 @@ test("選んだボーカルだけの音程を読み、明示した目標から�
 
 test("ループの設定・解除とバスだけの変更も自動保存される", async ({ page }) => {
   await load(page, [makeTone("autosave-route.wav", 440, 4)]);
-  const saved = () => page.evaluate(() => JSON.parse(localStorage.getItem("prism-river.project") ?? "null"));
+  const saved = () => savedProject(page);
   await expect.poll(saved).not.toBeNull();
 
   await dragRuler(page, 1, 3);
-  await expect.poll(async () => (await saved()).loop).toEqual({ start: 1, end: 3 });
+  await expect.poll(async () => (await saved())?.loop).toEqual({ start: 1, end: 3 });
   await page.reload();
   await expect(page.getByTestId("loop-zone")).toBeVisible();
   await expect(page.getByTestId("log")).toContainText("前回の続きから開きました");
   await page.getByTestId("loop-clear").click();
-  await expect.poll(async () => (await saved()).loop).toBeNull();
+  await expect.poll(async () => (await saved())?.loop).toBeNull();
   await page.getByTestId("bus-strings").click();
-  await expect.poll(async () => (await saved()).tracks[0].bus).toBe("strings");
+  await expect.poll(async () => (await saved())?.tracks[0].bus).toBe("strings");
   await page.reload();
   await expect(page.getByTestId("bus-strings")).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByTestId("loop-zone")).toHaveCount(0);

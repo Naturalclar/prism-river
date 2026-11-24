@@ -1,20 +1,21 @@
-import { expect, load, makeTone, setRange, test, type Page } from "./helpers";
+import { readFileSync } from "node:fs";
+import { expect, load, makeTone, savedProject, setRange, test, type Page } from "./helpers";
 
 /** プロジェクトのローカル保存・復元・削除（#18）と、自動保存・自動復元（#80）。 */
 
 /**
  * 自動保存が実際に書き終わるまで待つ。成功時はログを出さない作り（黙って保存する
- * のが自動保存の趣旨）なので、副作用そのもの＝localStorage のメタを見る。
+ * のが自動保存の趣旨）なので、副作用そのもの＝IndexedDB のメタを見る。
  */
 async function waitAutoSaved(page: Page) {
   await expect
-    .poll(async () => page.evaluate(() => localStorage.getItem("prism-river.project")), {
+    .poll(async () => savedProject(page), {
       timeout: 15_000,
     })
     .not.toBeNull();
 }
 
-/* #18: プロジェクトの保存・復元。メタは localStorage、音声は IndexedDB。 */
+/* #18: プロジェクトの保存・復元。メタと音声を IndexedDB から読む。 */
 test("プロジェクトを保存してリロード後に復元できる", async ({ page }) => {
   await load(page, [makeTone("keep1.wav", 440), makeTone("keep2.wav", 330, 3)]);
 
@@ -151,7 +152,7 @@ test("トラックを全部消しても保存データは残り、前回を復�
   /* 削除も touched なので自動保存が予約される。その待ち時間（1.2秒）を過ぎても
      保存データが残っていることを見る——ここを待たないと、消す実装でも通ってしまう。 */
   await page.waitForTimeout(2500);
-  expect(await page.evaluate(() => localStorage.getItem("prism-river.project"))).not.toBeNull();
+  expect(await savedProject(page)).not.toBeNull();
 
   /* 空になっても保存は消えないので、ボタンが出て戻せる。 */
   await page.getByRole("button", { name: "前回を復元", exact: true }).click();
@@ -165,15 +166,16 @@ test("保存データが壊れていても起動でき、理由が出る", async
   await waitAutoSaved(page);
 
   /* メタは残したまま音声だけ消す＝復元の途中で失敗する形にする。 */
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) => {
-        const req = indexedDB.deleteDatabase("prism-river");
-        req.addEventListener("success", () => resolve());
-        req.addEventListener("error", () => resolve());
-        req.addEventListener("blocked", () => resolve());
-      }),
-  );
+  await page.evaluate(() => new Promise<void>((resolve, reject) => {
+    const open = indexedDB.open("prism-river");
+    open.addEventListener("success", () => {
+      const db = open.result;
+      const tx = db.transaction("audio", "readwrite");
+      tx.objectStore("audio").clear();
+      tx.addEventListener("complete", () => { db.close(); resolve(); });
+      tx.addEventListener("abort", () => reject(tx.error));
+    });
+  }));
 
   await page.reload();
   await expect(page.getByTestId("log")).toContainText("復元に失敗しました", { timeout: 15_000 });
@@ -188,7 +190,7 @@ test("復元中にリロード・デコード失敗があっても元の保存�
   await page.getByTestId("fx-comp").click();
   await page.getByRole("button", { name: "プロジェクトを保存", exact: true }).click();
   await expect(page.getByTestId("log")).toContainText("プロジェクトを保存しました");
-  const saved = () => page.evaluate(() => localStorage.getItem("prism-river.project"));
+  const saved = () => savedProject(page);
   const original = await saved();
 
   await page.addInitScript(() => {
@@ -207,18 +209,109 @@ test("復元中にリロード・デコード失敗があっても元の保存�
   await page.waitForFunction(() => sessionStorage.getItem("interrupted") === "yes");
   // 2本目の復元を保留したまま、自動保存の待ち時間を超える。
   await page.waitForTimeout(1800);
-  expect(await saved()).toBe(original);
+  expect(await saved()).toEqual(original);
   await page.reload();
   await expect(page.getByTestId("log")).toContainText("test decode failure");
   await expect(page.getByTestId("track-head")).toHaveCount(0);
-  expect(await saved()).toBe(original);
+  expect(await saved()).toEqual(original);
 
   await page.getByRole("button", { name: "前回を復元", exact: true }).click();
   await expect(page.getByTestId("track-head")).toHaveCount(2);
   await expect(page.getByTestId("track-head").nth(1)).toContainText("second");
   await setRange(page, "[aria-label='first の音量']", 0.42);
-  await expect.poll(saved).not.toBe(original);
-  const meta = JSON.parse((await saved())!);
+  await expect.poll(saved).not.toEqual(original);
+  const meta = (await saved())!;
   expect(meta.tracks).toHaveLength(2);
   expect(meta.tracks[0].vol).toBe(0.42);
+});
+
+test("保存が途中で失敗しても直前の2本を音声ごと復元できる", async ({ page }) => {
+  await page.getByTestId("autosave").click();
+  await load(page, [makeTone("short.wav", 330, 1), makeTone("long.wav", 550, 3)]);
+  const save = page.getByRole("button", { name: "プロジェクトを保存", exact: true });
+  await save.click();
+  await expect(page.getByTestId("log")).toContainText("プロジェクトを保存しました");
+  await page.getByRole("button", { name: "short を削除", exact: true }).click();
+  await page.evaluate(() => {
+    // 旧保存形式はlocalStorage、新保存形式では同一トランザクションのメタ書き込みを失敗させる。
+    const set = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value) {
+      if (key === "prism-river.project") throw new DOMException("test quota", "QuotaExceededError");
+      return set.call(this, key, value);
+    };
+    const put = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function (...args) {
+      const request = put.apply(this, args);
+      if (this.name === "project") request.addEventListener("success", () => this.transaction.abort());
+      return request;
+    };
+  });
+  await save.click();
+  await expect(page.getByTestId("log")).toContainText("保存に失敗しました");
+  await page.reload();
+  await expect(page.getByTestId("track-head")).toHaveText([/short/, /long/]);
+  await expect(page.locator(".clock i")).toHaveText("/ 00:03.00");
+  await page.getByRole("button", { name: "long を削除", exact: true }).click();
+  await expect(page.locator(".clock i")).toHaveText("/ 00:01.00");
+  await save.click();
+  await expect(page.getByTestId("log")).toContainText("プロジェクトを保存しました");
+  await page.reload();
+  await expect(page.getByTestId("track-head")).toHaveText([/short/]);
+});
+
+test("旧形式の保存を復元し、localStorageが満杯でも新形式で保存できる", async ({ page }) => {
+  await page.getByTestId("autosave").click();
+  const wav = makeTone("legacy.wav", 440);
+  await load(page, [wav]);
+  const save = page.getByRole("button", { name: "プロジェクトを保存", exact: true });
+  await save.click();
+  await expect(page.getByTestId("log")).toContainText("プロジェクトを保存しました");
+  const meta = await savedProject(page);
+  await page.evaluate(async ({ json, pcm }) => {
+    await new Promise<void>((resolve, reject) => {
+      const req = indexedDB.deleteDatabase("prism-river");
+      req.addEventListener("success", () => resolve());
+      req.addEventListener("error", () => reject(req.error));
+    });
+    await new Promise<void>((resolve, reject) => {
+      const req = indexedDB.open("prism-river", 1);
+      req.addEventListener("upgradeneeded", () => {
+        const audio = req.result.createObjectStore("audio");
+        audio.put(new Blob([Uint8Array.from(atob(pcm), c => c.charCodeAt(0))]), 0);
+      });
+      req.addEventListener("success", () => { req.result.close(); resolve(); });
+      req.addEventListener("error", () => reject(req.error));
+    });
+    localStorage.setItem("prism-river.project", json);
+  }, { json: JSON.stringify(meta), pcm: readFileSync(wav).toString("base64") });
+  await page.reload();
+  await expect(page.getByTestId("track-head")).toHaveText([/legacy/]);
+  await page.evaluate(() => {
+    Storage.prototype.setItem = () => { throw new DOMException("full", "QuotaExceededError"); };
+  });
+  await setRange(page, "#mVol", 0.42);
+  await save.click();
+  await expect(page.getByTestId("log")).toContainText("プロジェクトを保存しました");
+  await page.reload();
+  await expect(page.getByTestId("track-head")).toHaveText([/legacy/]);
+  await expect(page.locator("#mVol")).toHaveValue("0.42");
+});
+
+test("別タブが音声を入れ替えた後の自動保存でも、設定と同じ音声が残る", async ({ page, context }) => {
+  await load(page, [makeTone("left.wav", 330), makeTone("right.wav", 660)]);
+  await waitAutoSaved(page);
+  const other = await context.newPage();
+  try {
+    await other.route(/https:\/\/fonts\.(googleapis|gstatic)\.com\/.*/, r => r.abort());
+    await other.goto("/");
+    await expect(other.getByTestId("track-head")).toHaveCount(2);
+    await other.getByRole("button", { name: "left を削除", exact: true }).click();
+    await expect.poll(async () => (await savedProject(other))?.tracks.length).toBe(1);
+    await setRange(page, "#mVol", 0.4);
+    await expect.poll(async () => (await savedProject(page))?.masterVol).toBe(0.4);
+    await page.reload();
+    await expect(page.getByTestId("track-head")).toHaveText([/left/, /right/]);
+  } finally {
+    await other.close();
+  }
 });

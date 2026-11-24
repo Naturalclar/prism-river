@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { encodeWavBytes } from "../src/lib/wav";
-import { captureSpeakers, capturedSamples, expect, load, makeTone, setRange, test, wavWindowPeak } from "./helpers";
+import { captureSpeakers, capturedSamples, expect, load, makeTone, savedProject, setRange, test, wavWindowPeak } from "./helpers";
 
 /** トラックエフェクト（EQ / コンプ）。 */
 
@@ -85,7 +85,7 @@ test("roomの末尾、バス、再読み込み後のPCMが一致する", async (
   await setRange(page, "#busvol-strings", 0);
   expect(wavWindowPeak(await mix(), 0, 1.5)).toBe(0);
   await setRange(page, "#busvol-strings", 1);
-  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("prism-river.project") || "{}").tracks?.[0]?.fx?.room)).toBe(1);
+  await expect.poll(async () => (await savedProject(page))?.tracks[0]?.fx.room).toBe(1);
   await page.reload();
   await fx.click();
   await expect(page.getByTestId("fx-room")).toHaveValue("1");

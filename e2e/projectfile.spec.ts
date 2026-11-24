@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, load, makeTone, setRange, test, type Page } from "./helpers";
+import { expect, load, makeTone, savedProject, setRange, test, type Page } from "./helpers";
 import { makeGarbage, putCopy } from "./fixture";
 import { buildZip } from "../src/lib/zip";
 
@@ -155,9 +155,7 @@ test(".prism の2本目が読めなくても現在のプロジェクトと保存
 
   page.once("dialog", (d) => void d.accept());
   await page.setInputFiles("[data-testid=picker]", prism);
-  await expect.poll(() => page.evaluate(() =>
-    JSON.parse(localStorage.getItem("prism-river.project")!).tracks.length,
-  )).toBe(2);
+  await expect.poll(async () => (await savedProject(page))?.tracks.length).toBe(2);
   await page.reload();
   await expect(page.getByTestId("track-head")).toHaveText([/incoming1/, /incoming2/]);
 });

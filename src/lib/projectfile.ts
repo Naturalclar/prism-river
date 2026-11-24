@@ -6,7 +6,7 @@ import { buildZip, readZip, ZipError } from "./zip";
  *
  * 中身は無圧縮 ZIP: `project.json`（`ProjectMeta` そのまま）＋
  * `audio/<n>.<ext>`（各トラックの元ファイルのバイト列）。端末内の保存
- * （store.ts・localStorage + IndexedDB）と同じ直列化を、ブラウザの外へ
+ * （store.ts・IndexedDB）と同じ直列化を、ブラウザの外へ
  * 持ち出せる形にしただけで、サーバーには何も送らない。
  */
 
