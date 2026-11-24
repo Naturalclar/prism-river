@@ -149,6 +149,7 @@ export class Engine {
   private recT0 = 0;
   /** MIDI 実機入力のセッション（#56）。マイク録音とは独立に持つ。 */
   private midiIn: MidiInSession | null = null;
+  private openingMidi = false;
   private midiRecCount = 0;
   private pxPerSec = DEFAULT_PX_PER_SEC;
   private playing = false;
@@ -274,6 +275,7 @@ export class Engine {
       openingMic: this.openingMic,
       recTake: this.take !== null,
       midiRecording: this.midiIn !== null,
+      openingMidi: this.openingMidi,
       webmBusy: this.webmBusy,
       mp3Busy: this.mp3Busy,
     };
@@ -1241,13 +1243,18 @@ export class Engine {
   }
 
   private async startMidiRecord(): Promise<void> {
-    if (this.midiIn) return;
+    if (this.midiIn || this.openingMidi) return;
+    this.openingMidi = true;
+    this.say("MIDI 入力を準備しています …");
     const res = await openMidiIn((e) => {
       /* 無反応のまま録れていない、が一番困るので受けた音数を都度出す。 */
       if (e.kind !== "on" || !this.midiIn) return;
       const n = this.midiIn.events.filter((x) => x.kind === "on").length;
       this.say(`MIDI 録音中 … 受信 ${n}音。もう一度 ♪ を押すと停止してトラックになります。`);
-    });
+    }).catch((err: unknown) => ({
+      error: `MIDI 入力を準備できませんでした: ${err instanceof Error ? err.message : String(err)}`,
+    }));
+    this.openingMidi = false;
     if ("error" in res) {
       this.say(res.error);
       return;

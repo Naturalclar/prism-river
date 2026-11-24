@@ -99,6 +99,7 @@ export function Deck({
               : "MIDI キーボードから録音（Web MIDI 対応ブラウザのみ）"
           }
           aria-label={snap.midiRecording ? "MIDI 録音を停止" : "MIDI キーボードから録音"}
+          disabled={snap.openingMidi}
           aria-pressed={snap.midiRecording}
           onClick={() => engine.toggleMidiRecord()}
         >
