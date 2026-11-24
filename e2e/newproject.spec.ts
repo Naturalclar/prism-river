@@ -1,4 +1,4 @@
-import { expect, load, makeTone, setRange, test, type Page } from "./helpers";
+import { expect, load, makeTone, savedProject, setRange, test, type Page } from "./helpers";
 import { putCopy } from "./fixture";
 
 /**
@@ -45,7 +45,7 @@ test("新規プロジェクトのあとリロードしても前のプロジェ�
   await load(page, [makeTone("np3.wav", 440)]);
   /* 自動保存（既定 ON）が書き終わるのを待つ。 */
   await expect
-    .poll(async () => page.evaluate(() => localStorage.getItem("prism-river.project")), {
+    .poll(async () => savedProject(page), {
       timeout: 15_000,
     })
     .not.toBeNull();
@@ -56,7 +56,7 @@ test("新規プロジェクトのあとリロードしても前のプロジェ�
   });
   await newButton(page).click();
   await expect(page.getByTestId("track-head")).toHaveCount(0);
-  expect(await page.evaluate(() => localStorage.getItem("prism-river.project"))).toBeNull();
+  expect(await savedProject(page)).toBeNull();
 
   /* 保存が無いので起動時の自動復元も走らず、「前回を復元」も出ない。 */
   await page.reload();

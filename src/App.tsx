@@ -20,11 +20,7 @@ import {
   autoSaveOn,
   clearProject,
   freeBytes,
-  loadMetaSync,
   loadProject,
-  requestPersist,
-  sameBlobs,
-  saveMeta,
   saveProject,
   setAutoSaveOn,
 } from "./lib/store";
@@ -39,12 +35,10 @@ export default function App() {
   const snap = useSyncExternalStore(engine.subscribe, engine.getSnapshot);
   const [armed, setArmed] = useState(false);
   /* 端末内に保存済みプロジェクトがあるか。中身は使わず有無と日時だけ見る。 */
-  const [savedAt, setSavedAt] = useState<number | null>(() => loadMetaSync()?.savedAt ?? null);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
   const [storeBusy, setStoreBusy] = useState(false);
   const restoring = useRef(false);
   const [auto, setAuto] = useState(autoSaveOn);
-  /* 前回書いた音声。同じ顔ぶれなら音声は書き直さない（メタだけで済む）。 */
-  const savedBlobs = useRef<Blob[] | null>(null);
   const autoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /* 自動保存の失敗を伝えるのは一度だけ。毎回出すとログが埋まる。 */
   const autoFailed = useRef(false);
@@ -55,7 +49,7 @@ export default function App() {
      「提案して待つ」をやめたのは、押しそびれたときに戻す手立てが無かったため
      （「前回を復元」はトラックが0本のときしか出ない）。 */
   useEffect(() => {
-    if (!loadMetaSync() || engine.getSnapshot().tracks.length) return;
+    if (engine.getSnapshot().tracks.length) return;
     void restoreInto("前回の続きから開きました", true);
     /* 初回マウントのみ。restoreInto は state setter と ref しか触らない。 */
     // oxlint-disable-next-line exhaustive-deps
@@ -74,9 +68,7 @@ export default function App() {
         );
         return;
       }
-      requestPersist();
       await saveProject(p.meta, p.blobs);
-      savedBlobs.current = p.blobs;
       setSavedAt(p.meta.savedAt);
       engine.notify(
         `プロジェクトを保存しました（トラック ${p.meta.tracks.length} 本 / 音声 ${(size / 1048576).toFixed(1)}MB / この端末のブラウザ内のみ）。`,
@@ -97,18 +89,17 @@ export default function App() {
     if (restoring.current || storeBusy) return;
     restoring.current = true;
     setStoreBusy(true);
-    engine.notify(openedByItself ? "前回のプロジェクトを読み込んでいます …" : "復元中 …");
     try {
-      const p = await loadProject();
+      const p = await loadProject((meta) => {
+        setSavedAt(meta.savedAt);
+        engine.notify(openedByItself ? "前回のプロジェクトを読み込んでいます …" : "復元中 …");
+      });
       if (!p) {
         setSavedAt(null);
-        engine.notify("保存データが見つかりませんでした。");
+        if (!openedByItself) engine.notify("保存データが見つかりませんでした。");
         return;
       }
       await engine.importProject(p.meta, p.blobs);
-      /* 復元した Blob がそのままトラックの srcBytes になるので、これを
-         「書いてある音声」として控える。直後の自動保存が音声を書き直さない。 */
-      savedBlobs.current = p.blobs;
       cancelAutoSave();
       engine.notify(
         `${lead}（トラック ${p.meta.tracks.length} 本 / 保存日時 ${new Date(p.meta.savedAt).toLocaleString()}）。` +
@@ -145,7 +136,6 @@ export default function App() {
       cancelAutoSave();
       engine.newProject();
       await clearProject();
-      savedBlobs.current = null;
       setSavedAt(null);
       engine.notify(
         `新規プロジェクトを始めました${n ? `（トラック ${n} 本を消しました）` : ""}。音声を追加するか、「プロジェクトを読み込む」で .prism を開けます。`,
@@ -163,7 +153,6 @@ export default function App() {
     try {
       cancelAutoSave();
       await clearProject();
-      savedBlobs.current = null;
       setSavedAt(null);
       engine.notify("保存データを削除しました。");
     } catch (err) {
@@ -189,14 +178,7 @@ export default function App() {
          残しておく方がよい（意図して消すなら「保存データを消す」がある）。 */
       if (!p) return;
       try {
-        if (sameBlobs(p.blobs, savedBlobs.current)) {
-          /* 音声は変わっていない＝メタ（数KB）だけ。 */
-          saveMeta(p.meta);
-        } else {
-          requestPersist();
-          await saveProject(p.meta, p.blobs);
-          savedBlobs.current = p.blobs;
-        }
+        await saveProject(p.meta, p.blobs);
         setSavedAt(p.meta.savedAt);
         autoFailed.current = false;
       } catch (err) {

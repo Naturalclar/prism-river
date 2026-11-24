@@ -1,5 +1,5 @@
 import { createServer } from "vite";
-import { expect, load, makeTone, setRange, test } from "./helpers";
+import { expect, load, makeTone, savedProject, setRange, test } from "./helpers";
 
 // React's mount effect replay is only enabled by the development build.
 test("StrictModeの起動時に保存済みトラックを一度だけ復元する", async ({ page }) => {
@@ -9,7 +9,7 @@ test("StrictModeの起動時に保存済みトラックを一度だけ復元す�
     await page.goto(dev.resolvedUrls!.local[0]);
     await load(page, [makeTone("strict-restore.wav", 330, 1)]);
     await setRange(page, "#mVol", 0.4);
-    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("prism-river.project") ?? "{}").masterVol)).toBe(0.4);
+    await expect.poll(async () => (await savedProject(page))?.masterVol).toBe(0.4);
     await page.addInitScript(() => {
       let decodes = 0;
       const decode = AudioContext.prototype.decodeAudioData;

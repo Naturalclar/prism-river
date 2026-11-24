@@ -1,9 +1,7 @@
 /**
  * プロジェクトの保存・復元（#18）。
  *
- * 置き場所は2段に分ける:
- * - メタ（トラックの設定・JSON にできる軽いもの）→ localStorage
- * - 音声（読み込んだ元ファイルのバイト列そのまま）→ IndexedDB
+ * 設定と音声は IndexedDB の別ストアに置き、同じトランザクションで保存する。
  *
  * デコード済み PCM ではなく元ファイルを保存するのは、mp3 等なら 1/10 程度の
  * サイズで済み、復元が既存のデコード経路をそのまま通る（＝デコード時間の
@@ -190,6 +188,7 @@ const META_KEY = "prism-river.project";
 const AUTO_KEY = "prism-river.autosave";
 const DB_NAME = "prism-river";
 const DB_STORE = "audio";
+const PROJECT_STORE = "project";
 
 /**
  * 自動保存（#80）を使うか。既定は ON。
@@ -230,11 +229,27 @@ export function sameBlobs(now: Blob[], saved: Blob[] | null): boolean {
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.addEventListener("upgradeneeded", () => {
+    const req = indexedDB.open(DB_NAME, 2);
+    let migrated = false;
+    req.addEventListener("upgradeneeded", (event) => {
       if (!req.result.objectStoreNames.contains(DB_STORE)) req.result.createObjectStore(DB_STORE);
+      const project = req.result.createObjectStore(PROJECT_STORE);
+      if (event.oldVersion === 1) {
+        const json = localStorage.getItem(META_KEY);
+        if (json) {
+          project.put({ json, audioId: "legacy" }, "current");
+          migrated = true;
+        }
+      }
     });
-    req.addEventListener("success", () => resolve(req.result));
+    req.addEventListener("success", () => {
+      // 旧メタは移行トランザクション成功後にだけ片付ける。
+      if (migrated) {
+        try { localStorage.removeItem(META_KEY); } catch { /* 移行済み */ }
+      }
+      req.result.addEventListener("versionchange", () => req.result.close());
+      resolve(req.result);
+    });
     req.addEventListener("error", () =>
       reject(req.error ?? new Error("IndexedDB を開けませんでした")),
     );
@@ -253,83 +268,79 @@ function done(tx: IDBTransaction): Promise<void> {
   });
 }
 
-/** 起動時の同期チェック用。保存があればメタを返す。 */
-export function loadMetaSync(): ProjectMeta | null {
+type SavedRecord = { json: string; audioId: string };
+let lastAudio: { id: string; blobs: Blob[] } | null = null;
+
+function read<T>(req: IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    req.addEventListener("success", () => resolve(req.result));
+    req.addEventListener("error", () => reject(req.error));
+  });
+}
+
+async function withProject<T>(
+  mode: IDBTransactionMode,
+  work: (audio: IDBObjectStore, project: IDBObjectStore) => Promise<T>,
+): Promise<T> {
+  const db = await openDb();
   try {
-    return decodeMeta(localStorage.getItem(META_KEY));
-  } catch {
-    /* localStorage 自体が使えない環境（ストレージ無効化等）は「保存なし」扱い。 */
-    return null;
+    const tx = db.transaction([DB_STORE, PROJECT_STORE], mode);
+    const finished = done(tx);
+    try {
+      const result = await work(tx.objectStore(DB_STORE), tx.objectStore(PROJECT_STORE));
+      await finished;
+      return result;
+    } catch (err) {
+      try { tx.abort(); } catch { /* 既に終了している */ }
+      await finished.catch(() => {});
+      throw err;
+    }
+  } finally {
+    db.close();
   }
 }
 
-/**
- * プロジェクトを保存する。音声 → メタの順に書き、途中で失敗したら
- * メタは古いまま残る（半端な新メタで復元が壊れるよりよい）。
- */
+/** メタと音声を一度に確定する。別タブが音声を更新していたら、同じ配列でも書き直す。 */
 export async function saveProject(meta: ProjectMeta, blobs: Blob[]): Promise<void> {
-  const db = await openDb();
-  try {
-    const tx = db.transaction(DB_STORE, "readwrite");
-    const store = tx.objectStore(DB_STORE);
-    store.clear();
-    blobs.forEach((b, i) => store.put(b, i));
-    await done(tx);
-  } finally {
-    db.close();
-  }
-  localStorage.setItem(META_KEY, encodeMeta(meta));
+  const id = await withProject("readwrite", async (audio, project) => {
+    const previous: SavedRecord | undefined = await read(project.get("current"));
+    let audioId = previous?.audioId;
+    if (!audioId || audioId !== lastAudio?.id || !sameBlobs(blobs, lastAudio.blobs)) {
+      requestPersist();
+      audioId = crypto.getRandomValues(new Uint32Array(4)).join("-");
+      audio.clear();
+      blobs.forEach((blob, i) => audio.put(blob, i));
+    }
+    project.put({ json: encodeMeta(meta), audioId }, "current");
+    return audioId;
+  });
+  lastAudio = { id, blobs };
 }
 
-/**
- * メタだけを書き直す（#80 の自動保存）。音量やトリムを触っただけなら音声は
- * 変わらないので、数KB の JSON を書くだけで済ませる——ここで毎回 IndexedDB へ
- * 音声を書きに行くと、スライダーを動かすたびに数十MB の書き込みが走る。
- */
-export function saveMeta(meta: ProjectMeta): void {
-  localStorage.setItem(META_KEY, encodeMeta(meta));
-}
-
-/** 保存されたプロジェクトを読む。音声が欠けていたら例外（呼び出し側で伝える）。 */
-export async function loadProject(): Promise<{ meta: ProjectMeta; blobs: Blob[] } | null> {
-  const meta = loadMetaSync();
-  if (!meta) return null;
-  const db = await openDb();
-  try {
-    const tx = db.transaction(DB_STORE, "readonly");
-    const store = tx.objectStore(DB_STORE);
-    const blobs = await Promise.all(
-      meta.tracks.map(
-        (_, i) =>
-          new Promise<Blob>((resolve, reject) => {
-            const req = store.get(i);
-            req.addEventListener("success", () => {
-              if (req.result instanceof Blob) resolve(req.result);
-              else reject(new Error("保存された音声データが見つかりません"));
-            });
-            req.addEventListener("error", () =>
-              reject(req.error ?? new Error("音声データを読めませんでした")),
-            );
-          }),
-      ),
-    );
+/** 1つの読み取りトランザクションで揃ったメタと音声を読む。 */
+export async function loadProject(onMeta?: (meta: ProjectMeta) => void): Promise<{ meta: ProjectMeta; blobs: Blob[] } | null> {
+  return withProject("readonly", async (audio, project) => {
+    const record: SavedRecord | undefined = await read(project.get("current"));
+    if (!record) return null;
+    const meta = decodeMeta(record.json);
+    if (!meta) throw new Error("保存された設定を読み取れません");
+    onMeta?.(meta);
+    const blobs = await Promise.all(meta.tracks.map(async (_, i) => {
+      const blob = await read(audio.get(i));
+      if (!(blob instanceof Blob)) throw new Error("保存された音声データが見つかりません");
+      return blob;
+    }));
+    lastAudio = { id: record.audioId, blobs };
     return { meta, blobs };
-  } finally {
-    db.close();
-  }
+  });
 }
 
-/** 保存データを消す。メタ → 音声の順（メタが先に消えれば復元候補から外れる）。 */
 export async function clearProject(): Promise<void> {
-  localStorage.removeItem(META_KEY);
-  const db = await openDb();
-  try {
-    const tx = db.transaction(DB_STORE, "readwrite");
-    tx.objectStore(DB_STORE).clear();
-    await done(tx);
-  } finally {
-    db.close();
-  }
+  await withProject("readwrite", async (audio, project) => {
+    audio.clear();
+    project.clear();
+  });
+  lastAudio = null;
 }
 
 /** ストレージの空き（bytes）。見積もりが取れない環境では null。 */
