@@ -211,3 +211,21 @@ test("FX比較は同時刻に始まる2音を同音量で切り替え、保存�
   }
   expect(Math.abs(20 * Math.log10(preview / Math.sqrt(energy / 4096)))).toBeLessThan(0.75);
 });
+
+test("選んだボーカルだけの音程を読み、明示した目標からの差を表示する", async ({ page }) => {
+  await load(page, [makeTone("back.wav", 150, 4), makeTone("vocal.wav", 445, 4)]);
+  await dragRuler(page, 1, 3);
+  await page.getByRole("button", { name: "vocal のエフェクト" }).click();
+  await page.getByRole("button", { name: /選択トラックの音程を表示/ }).click();
+  const panel = page.locator(".pitch-panel");
+  await expect(panel.getByRole("img")).toBeVisible();
+  await expect(panel.locator("output")).toContainText("A4");
+  await expect(panel.locator("output")).not.toContainText("cent");
+  await panel.getByRole("combobox").selectOption("69");
+  const value = await panel.locator("output").innerText();
+  const cents = Number(value.match(/目標との差 ([-\d]+) cent/)?.[1]);
+  expect(Math.abs(cents - 1200 * Math.log2(445 / 440))).toBeLessThan(5);
+  await page.getByTestId("loop-clear").click();
+  await expect(panel.getByRole("img")).toHaveCount(0);
+  await expect(panel.getByRole("button")).toBeDisabled();
+});

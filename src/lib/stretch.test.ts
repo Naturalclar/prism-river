@@ -6,6 +6,7 @@ import {
   normalizeStretch,
   pitchScale,
   rescaleSeconds,
+  shiftPhrasePcm,
   stretchPcm,
   stretchedLength,
   timeRatio,
@@ -105,6 +106,15 @@ describe("stretchPcm（Rubber Band / WASM）", () => {
     /* 440Hz のまま（これができないなら playbackRate と変わらない）。 */
     expect(approxHz(out, SR, SR)).toBeGreaterThan(430);
     expect(approxHz(out, SR, SR)).toBeLessThan(450);
+  });
+
+  it.each([-1, 1])("微小なフレーズ補正は尺を保って目標方向へ動かす (%i)", async (sign) => {
+    const freq = 440 * 2 ** (sign * 35 / 1200);
+    const input = tone(freq, 2, SR);
+    const [out] = await shiftPhrasePcm(await wasm(), [input], SR, -sign * 20);
+    const after = approxHz(out, SR, SR / 2);
+    expect(out.length).toBe(input.length);
+    expect(Math.abs(after - 440)).toBeLessThan(Math.abs(freq - 440) * 0.8);
   });
 
   it("ピッチだけ +12半音 上げると尺は変わらず周波数が倍になる", async () => {

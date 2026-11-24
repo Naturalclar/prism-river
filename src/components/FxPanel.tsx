@@ -1,4 +1,5 @@
 import { MAX_COMPARE_SECONDS } from "../audio/comparison";
+import { PitchPanel } from "./PitchPanel";
 import { engine } from "../audio/instance";
 import type { Snapshot } from "../audio/engine";
 
@@ -61,6 +62,8 @@ export function FxPanel({ snap }: { snap: Snapshot }) {
           </>
         )}
       </div>
+
+      <PitchPanel key={`${t.id}:${snap.loop?.start}:${snap.loop?.end}`} id={t.id} available={!!snap.loop} />
 
       {BANDS.map(([band, label]) => (
         <div className="head-pot" key={band}>

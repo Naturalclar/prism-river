@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="ja"><meta charset="utf-8"><title>フレーズ補正試聴</title>
+<h1>単音フレーズの補正試聴</h1>
+<p>ローカルの単独歌声WAVと、同じ音を歌っている短い範囲を指定します。前後0.45秒を含めて試聴できます。</p>
+<label>録音 <input type="file" id="file" accept="audio/wav"></label>
+<label>開始秒 <input type="number" id="start" step="0.01" value="1.32"></label>
+<label>終了秒 <input type="number" id="end" step="0.01" value="2.16"></label>
+<label>目標MIDI音高（60=C4） <input type="number" id="target" value="53"></label>
+<button id="run">試聴音源を作る</button>
+<p>原音 <audio id="raw" controls></audio></p><p>補正 <audio id="wet" controls></audio></p>
+<pre id="result" role="status"></pre>
+<script type="module" src="./pitch-study.ts"></script></html>
