@@ -18,6 +18,7 @@ export const PROJECT_VERSION = 2;
 
 /** トラックエフェクト。engine.ts の TrackFx と構造互換（循環 import を避けて別定義）。 */
 export type FxMeta = {
+  room?: number;
   eq: { low: number; mid: number; high: number };
   comp: { on: boolean; threshold: number; ratio: number; attack: number; release: number };
 };
@@ -89,10 +90,11 @@ const bool = (v: unknown): v is boolean => typeof v === "boolean";
 
 function isFxMeta(v: unknown): v is FxMeta {
   if (typeof v !== "object" || v === null) return false;
-  const f = v as { eq?: Record<string, unknown>; comp?: Record<string, unknown> };
+  const f = v as { room?: unknown; eq?: Record<string, unknown>; comp?: Record<string, unknown> };
   if (typeof f.eq !== "object" || f.eq === null) return false;
   if (typeof f.comp !== "object" || f.comp === null) return false;
   return (
+    (f.room === undefined || num(f.room)) &&
     num(f.eq.low) &&
     num(f.eq.mid) &&
     num(f.eq.high) &&
