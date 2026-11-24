@@ -174,7 +174,7 @@ export default function App() {
     autoTimer.current = null;
   }
 
-  /* 自動保存（#80）。音に効く変更（touched）だけを受けて、止まってから1回書く。 */
+  /* 自動保存（#80）。保存対象の編集を受けて、止まってから1回書く。 */
   useEffect(() => {
     if (!auto) return;
 
