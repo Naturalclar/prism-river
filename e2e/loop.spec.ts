@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import type { Page } from "@playwright/test";
-import { expect, load, makeTone, test } from "./helpers";
+import { expect, load, makeTone, setRange, test } from "./helpers";
 
 /** ループする範囲の指定（#88）。ルーラーの横ドラッグで区間を決める。 */
 
@@ -132,4 +133,34 @@ test("保存 → リロード → 復元でループ範囲が戻る", async ({ p
   if (!band || !ruler) throw new Error("band not found");
   expect(band.x - ruler.x).toBeCloseTo(1 * PPS, 0);
   expect(band.width).toBeCloseTo(2 * PPS, 0);
+});
+
+test("選択WAVは全体WAVの同じPCM区間と一致する", async ({ page }) => {
+  await load(page, [makeTone("bed.wav", 150, 4), makeTone("voice.wav", 330, 2)]);
+  const selected = page.getByRole("button", { name: /選択範囲をWAV/ });
+  await expect(selected).toHaveCount(0);
+  const clip = await page.getByTestId("clip").nth(1).boundingBox();
+  if (!clip) throw new Error("missing second clip");
+  const x = clip.x + 35, y = clip.y + clip.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + PPS * 2, y, { steps: 8 });
+  await page.mouse.up();
+  await page.getByRole("button", { name: /のエフェクト$/ }).first().click();
+  await setRange(page, "[data-testid=fx-low]", -9);
+  await dragRuler(page, 1, 3);
+  await expect(selected).toContainText("1.00–3.00");
+  const all = page.waitForEvent("download");
+  await page.getByRole("button", { name: "ミックスを書き出す", exact: true }).click();
+  const full = readFileSync((await (await all).path())!);
+  const download = page.waitForEvent("download");
+  await selected.click();
+  const result = await download;
+  expect(result.suggestedFilename()).toBe("prism-river-selection.wav");
+  const cut = readFileSync((await result.path())!);
+  const bytesPerSecond = full.readUInt32LE(28);
+  expect(cut.readUInt32LE(40)).toBe(2 * bytesPerSecond);
+  expect(cut.subarray(44).equals(full.subarray(44 + bytesPerSecond, 44 + 3 * bytesPerSecond))).toBe(true);
+  await page.getByTestId("loop-clear").click();
+  await expect(selected).toHaveCount(0);
 });
