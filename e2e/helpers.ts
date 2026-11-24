@@ -137,3 +137,35 @@ export async function canvasPixelSum(page: Page, selector: string, atRow = 0.5):
     return s;
   }, atRow);
 }
+
+/** Tap the actual speaker connection, including audition paths that bypass the transport meters. */
+export async function captureSpeakers(page: Page) {
+  await page.addInitScript(() => {
+    const chunks: Float32Array[] = [];
+    Object.assign(window, { speakerChunks: chunks });
+    const tapped = new WeakSet<AudioNode>();
+    const connect = AudioNode.prototype.connect;
+    AudioNode.prototype.connect = new Proxy(connect, {
+      apply(target, from: AudioNode, args) {
+        const result = Reflect.apply(target, from, args);
+        const ctx = from.context;
+        if (ctx instanceof AudioContext && args[0] === ctx.destination && !tapped.has(from)) {
+          tapped.add(from);
+          const tap = ctx.createScriptProcessor(512, 1, 1);
+          tap.onaudioprocess = (event) => chunks.push(event.inputBuffer.getChannelData(0).slice());
+          Reflect.apply(target, from, [tap]);
+          Reflect.apply(target, tap, [ctx.destination]);
+        }
+        return result;
+      },
+    });
+  });
+  await page.reload();
+}
+
+export async function capturedSamples(page: Page) {
+  return page.evaluate(() => {
+    const chunks = (window as Window & { speakerChunks?: Float32Array[] }).speakerChunks ?? [];
+    return chunks.flatMap((chunk) => Array.from(chunk));
+  });
+}

@@ -39,6 +39,8 @@ test("書き出した .prism を読み込むとトラックと設定が戻り、
   await expect(page.getByTestId("track-head").first()).toContainText("50");
   await page.getByTestId("track-head").nth(1).getByTestId("bus-strings").click();
 
+  await page.getByRole("button", { name: /pf1 のエフェクト$/ }).click();
+  await setRange(page, "[data-testid=fx-room]", 0.38);
   const prism = await exportPrism(page, "roundtrip.prism");
   /* 他のツールでも開ける普通の ZIP（PK\x03\x04 で始まる）。 */
   const head = readFileSync(prism).subarray(0, 4);
@@ -57,6 +59,9 @@ test("書き出した .prism を読み込むとトラックと設定が戻り、
     page.getByTestId("track-head").nth(1).getByTestId("bus-strings"),
   ).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".clock i")).toHaveText("/ 00:03.00");
+
+  await page.getByRole("button", { name: /pf1 のエフェクト$/ }).click();
+  await expect(page.getByTestId("fx-room")).toHaveValue("0.38");
 
   /* 戻したプロジェクトからミックスが書き出せる。 */
   const download = page.waitForEvent("download");

@@ -32,7 +32,7 @@ export function projectMetaOf(
       trimEnd: t.trimEnd,
       fadeIn: t.fadeIn,
       fadeOut: t.fadeOut,
-      fx: { eq: { ...t.fx.eq }, comp: { ...t.fx.comp } },
+      fx: { room: t.fx.room, eq: { ...t.fx.eq }, comp: { ...t.fx.comp } },
       color: t.color,
       bus: t.bus,
       ...(t.midiChannel === null ? {} : { midiChannel: t.midiChannel }),

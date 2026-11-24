@@ -34,7 +34,7 @@ export function FxPanel({ snap }: { snap: Snapshot }) {
     <div className="fxpanel" data-testid="fxpanel">
       <div className="fx-top">
         <b style={{ color: t.color }}>{t.name}</b>
-        <span>EQ / Comp</span>
+        <span>EQ / Comp / Room</span>
         <button
           className="tog"
           aria-label="エフェクトを閉じる"
@@ -73,6 +73,14 @@ export function FxPanel({ snap }: { snap: Snapshot }) {
         </button>
         <span>Compressor</span>
       </div>
+
+      <label className="head-pot">
+        <span>Room</span>
+        <input type="range" min={0} max={1} step={0.01} value={t.fx.room}
+          aria-label={`${t.name} のルームリバーブ`} data-testid="fx-room"
+          onChange={(e) => engine.setRoom(t.id, e.currentTarget.valueAsNumber)} />
+        <em>{Math.round(t.fx.room * 100)}%</em>
+      </label>
 
       {COMP.map((c) => (
         <div className="head-pot" key={c.key}>

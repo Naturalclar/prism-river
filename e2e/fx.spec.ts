@@ -1,4 +1,6 @@
-import { expect, load, makeTone, setRange, test, wavWindowPeak } from "./helpers";
+import { readFileSync } from "node:fs";
+import { encodeWavBytes } from "../src/lib/wav";
+import { captureSpeakers, capturedSamples, expect, load, makeTone, setRange, test, wavWindowPeak } from "./helpers";
 
 /** トラックエフェクト（EQ / コンプ）。 */
 
@@ -49,4 +51,43 @@ test("FX を開いたまま選択を変えると、パネルもそのトラッ�
   await heads.nth(0).locator(".head-name").click();
   await expect(title).toHaveText("a");
   await expect(page.getByTestId("fx-low")).toHaveValue("-12");
+});
+
+test("roomの末尾、バス、再読み込み後のPCMが一致する", async ({ page }) => {
+  await captureSpeakers(page);
+  const sr = 44100;
+  const impulse = new Float32Array(sr);
+  impulse[sr - Math.round(0.008 * sr)] = 0.9;
+  const bytes = encodeWavBytes({ sampleRate: sr, length: sr, numberOfChannels: 1, getChannelData: () => impulse });
+  await page.getByTestId("picker").setInputFiles({ name: "pulse.wav", mimeType: "audio/wav", buffer: Buffer.from(bytes) });
+  const fx = page.getByRole("button", { name: /のエフェクト$/ });
+  await fx.click();
+  const mix = async () => {
+    const download = page.waitForEvent("download");
+    await page.getByRole("button", { name: "ミックスを書き出す", exact: true }).click();
+    return (await (await download).path())!;
+  };
+  expect(wavWindowPeak(await mix(), 1, 1.1)).toBe(0);
+  await page.getByTestId("bus-strings").click();
+  await setRange(page, "[data-testid=fx-room]", 1);
+  await page.getByRole("button", { name: "再生", exact: true }).click();
+  await expect(page.getByTestId("log")).toContainText("再生を終了");
+  // Allow the live tail and the audio callback to drain after transport reaches the end.
+  await page.waitForTimeout(350);
+  const live = await capturedSamples(page);
+  const onset = live.findIndex((sample) => Math.abs(sample) > 0.1);
+  expect(onset).toBeGreaterThan(0);
+  // The fixture contains exactly one dry impulse. Secondary arrivals must be room output.
+  expect(live.slice(onset + 300, onset + 3500).some((sample) => Math.abs(sample) > 0.03)).toBe(true);
+  const wet = await mix();
+  expect(wavWindowPeak(wet, 1.01, 1.05)).toBeGreaterThan(1000);
+  expect(wavWindowPeak(wet, 1.11, 1.2)).toBeGreaterThan(1);
+  await setRange(page, "#busvol-strings", 0);
+  expect(wavWindowPeak(await mix(), 0, 1.5)).toBe(0);
+  await setRange(page, "#busvol-strings", 1);
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("prism-river.project") || "{}").tracks?.[0]?.fx?.room)).toBe(1);
+  await page.reload();
+  await fx.click();
+  await expect(page.getByTestId("fx-room")).toHaveValue("1");
+  expect(readFileSync(await mix()).equals(readFileSync(wet))).toBe(true);
 });

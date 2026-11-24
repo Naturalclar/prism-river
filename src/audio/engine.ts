@@ -30,12 +30,12 @@ import {
   rescaleSeconds,
   type StretchParams,
 } from "../lib/stretch";
-import { BUS_IDS, type BusId, type BusVols, type ProjectMeta } from "../lib/store";
+import { BUS_IDS, type BusId, type BusVols, type FxMeta, type ProjectMeta } from "../lib/store";
 import { clamp } from "../lib/time";
 import { trimEndTo, trimStartTo } from "../lib/trim";
 import { encodeWav } from "../lib/wav";
 import { deliverBlob, deliverWav, recordToWebm, renderMix, webmSupported } from "./bounce";
-import { EQ_HIGH_HZ, EQ_LOW_HZ, EQ_MID_HZ, makeBiquad, rms, scheduleFades } from "./graph";
+import { EQ_HIGH_HZ, EQ_LOW_HZ, EQ_MID_HZ, connectRoom, makeBiquad, rms, scheduleFades } from "./graph";
 import { renderDrums } from "./drums";
 import { renderMidi } from "./midi";
 import { stretchInWorker } from "./stretch";
@@ -50,7 +50,6 @@ import {
   type Snapshot,
   type Telemetry,
   type Track,
-  type TrackFx,
 } from "./types";
 
 /* 型と定数は types.ts が正本。コンポーネントは従来どおりここから import できる。 */
@@ -237,7 +236,7 @@ export class Engine {
         fadeIn: t.fadeIn,
         fadeOut: t.fadeOut,
         bus: t.bus,
-        fx: { eq: { ...t.fx.eq }, comp: { ...t.fx.comp } },
+        fx: { room: t.fx.room, eq: { ...t.fx.eq }, comp: { ...t.fx.comp } },
         dimmed: t.mute || (solo && !t.solo),
         selected: t.id === this.selectedId,
         stretch: t.stretch ? { ...t.stretch } : null,
@@ -564,6 +563,7 @@ export class Engine {
       fxMid,
       fxHigh,
       fxComp,
+      roomSend: null,
       color: HUE[this.nextHue++ % HUE.length],
       decodeMs: ms,
       peaks: null,
@@ -661,6 +661,7 @@ export class Engine {
     this.stretching.delete(id);
     this.stretchGen.delete(id);
     this.stopSrc(t);
+    this.clearRoom(t);
     try {
       t.gain.disconnect();
       t.fxLow.disconnect();
@@ -1306,6 +1307,8 @@ export class Engine {
     for (const t of this.tracks) {
       const on = !t.mute && (!solo || t.solo);
       t.gain.gain.value = on ? t.vol : 0;
+      if (!on) this.clearRoom(t);
+      else if (this.playing) this.syncRoom(t);
     }
   }
 
@@ -1473,6 +1476,29 @@ export class Engine {
     this.emit();
   }
 
+  private clearRoom(t: Track): void {
+    t.roomSend?.disconnect();
+    t.roomSend = null;
+  }
+
+  private syncRoom(t: Track): void {
+    if (t.fx.room <= 0 || t.gain.gain.value === 0) {
+      this.clearRoom(t);
+    } else if (t.roomSend) {
+      t.roomSend.gain.value = t.fx.room;
+    } else {
+      t.roomSend = connectRoom(this.audio(), t.fx.comp.on ? t.fxComp : t.fxHigh, t.pan, t.fx.room);
+    }
+  }
+
+  setRoom(id: string, amount: number): void {
+    const t = this.find(id);
+    if (!t) return;
+    t.fx.room = clamp(amount, 0, 1);
+    this.syncRoom(t);
+    this.touched();
+  }
+
   /** EQ のバンドゲイン（dB）。常設ノードなので再生中でも即座に効く。 */
   setEq(id: string, band: "low" | "mid" | "high", dB: number): void {
     const t = this.find(id);
@@ -1495,7 +1521,8 @@ export class Engine {
    * 復元した fx を今の実装の範囲にクランプして、データと常設ノードの両方へ
    * 反映する。データを代入するだけではノードに乗らないので必ずここを通す。
    */
-  private applyFx(t: Track, fx: TrackFx): void {
+  private applyFx(t: Track, fx: FxMeta): void {
+    t.fx.room = clamp(fx.room ?? 0, 0, 1);
     t.fx.eq.low = clamp(fx.eq.low, -12, 12);
     t.fx.eq.mid = clamp(fx.eq.mid, -12, 12);
     t.fx.eq.high = clamp(fx.eq.high, -12, 12);
@@ -1514,6 +1541,7 @@ export class Engine {
   toggleComp(id: string): void {
     const t = this.find(id);
     if (!t) return;
+    this.clearRoom(t);
     t.fx.comp.on = !t.fx.comp.on;
     t.fxHigh.disconnect();
     t.fxComp.disconnect();
@@ -1528,6 +1556,7 @@ export class Engine {
     } else {
       t.fxHigh.connect(t.pan);
     }
+    if (this.playing) this.syncRoom(t);
     this.touched();
   }
 
@@ -1702,6 +1731,8 @@ export class Engine {
     this.startedAt = at;
     for (const t of this.tracks) {
       this.stopSrc(t);
+      this.clearRoom(t);
+      this.syncRoom(t);
       const eff = t.trimEnd - t.trimStart;
       const local = this.seekAt - t.offset;
       if (local >= eff) continue;
@@ -1728,8 +1759,11 @@ export class Engine {
   }
 
   /** `quiet` のときは位置を確定させない（シークやドラッグ中の組み直し用）。 */
-  halt(quiet = false): void {
-    for (const t of this.tracks) this.stopSrc(t);
+  halt(quiet = false, letRoomDecay = false): void {
+    for (const t of this.tracks) {
+      this.stopSrc(t);
+      if (!letRoomDecay) this.clearRoom(t);
+    }
     if (this.playing && !quiet) this.seekAt = Math.min(this.total(), this.now());
     this.playing = false;
     cancelAnimationFrame(this.raf);
@@ -1749,6 +1783,7 @@ export class Engine {
   }
 
   seek(sec: number): void {
+    if (!this.playing) for (const t of this.tracks) this.clearRoom(t);
     this.seekAt = Math.max(0, Math.min(this.total(), sec));
     if (this.playing) {
       this.halt(true);
@@ -1817,7 +1852,7 @@ export class Engine {
         this.play();
         return;
       }
-      this.halt();
+      this.halt(false, true);
       this.seekAt = 0;
       this.emitFrame();
       this.say("再生を終了しました。");

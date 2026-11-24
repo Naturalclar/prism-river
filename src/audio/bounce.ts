@@ -1,5 +1,5 @@
 import { BUS_IDS, type BusId, type BusVols } from "../lib/store";
-import { buildFxChain, scheduleFades } from "./graph";
+import { buildFxChain, connectRoom, ROOM_SECONDS, scheduleFades } from "./graph";
 import type { Downloads, Track } from "./types";
 
 /** webm 書き出しのコンテナ。MediaRecorder の対応はブラウザ依存なので使用前に確認する。 */
@@ -19,7 +19,12 @@ export async function renderMix(
 ): Promise<{ rendered: AudioBuffer; ms: number }> {
   const t0 = performance.now();
   const sr = ctx.sampleRate;
-  const off = new OfflineAudioContext(2, Math.ceil(dur * sr) + sr * 0.1, sr);
+  const solo = tracks.some((t) => t.solo);
+  const audible = tracks.filter((t) => !t.mute && (!solo || t.solo));
+  const end = audible.reduce((latest, t) => (t.fx.room > 0
+    ? Math.max(latest, t.offset + t.trimEnd - t.trimStart + ROOM_SECONDS)
+    : latest), dur);
+  const off = new OfflineAudioContext(2, Math.ceil(end * sr) + Math.floor(sr * 0.1), sr);
   const mg = off.createGain();
   mg.gain.value = masterVol;
   mg.connect(off.destination);
@@ -31,9 +36,7 @@ export async function renderMix(
     g.connect(mg);
     busG[bus] = g;
   }
-  const solo = tracks.some((t) => t.solo);
-  for (const t of tracks) {
-    if (t.mute || (solo && !t.solo)) continue;
+  for (const t of audible) {
     const g = off.createGain();
     const p = off.createStereoPanner();
     const s = off.createBufferSource();
@@ -58,6 +61,7 @@ export async function renderMix(
     } else {
       g.connect(p);
     }
+    if (t.fx.room > 0) connectRoom(off, chain?.output ?? g, p, t.fx.room);
     p.connect(t.bus ? busG[t.bus] : mg);
     s.start(t.offset, t.trimStart, eff);
   }

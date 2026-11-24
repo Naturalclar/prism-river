@@ -1,3 +1,4 @@
+import type { connectRoom } from "./graph";
 import type { Peaks } from "../lib/peaks";
 import type { DrumPattern } from "../lib/drums";
 import type { RollPattern } from "../lib/pianoroll";
@@ -21,12 +22,14 @@ export const BUS_INFO: Record<BusId, { label: string; sister: string; color: str
 
 /** トラックエフェクトのパラメータ。プレーンなデータで、ノードとは分離。 */
 export type TrackFx = {
+  room: number;
   /** 各バンドのゲイン（dB）。0 で素通し。 */
   eq: { low: number; mid: number; high: number };
   comp: { on: boolean; threshold: number; ratio: number; attack: number; release: number };
 };
 
 export const defaultFx = (): TrackFx => ({
+  room: 0,
   eq: { low: 0, mid: 0, high: 0 },
   comp: { on: false, threshold: -24, ratio: 4, attack: 0.003, release: 0.25 },
 });
@@ -76,6 +79,7 @@ export type Track = {
   fxMid: BiquadFilterNode;
   fxHigh: BiquadFilterNode;
   fxComp: DynamicsCompressorNode;
+  roomSend: ReturnType<typeof connectRoom> | null;
   color: string;
   decodeMs: number;
   peaks: Peaks | null;

@@ -21,6 +21,48 @@ export function makeBiquad(
   return b;
 }
 
+export const ROOM_SECONDS = 0.42;
+const impulses = new WeakMap<BaseAudioContext, AudioBuffer>();
+
+/** A fixed mono room response keeps stereo placement and renders repeatable. */
+function roomImpulse(ctx: BaseAudioContext): AudioBuffer {
+  const cached = impulses.get(ctx);
+  if (cached) return cached;
+  const ir = ctx.createBuffer(1, Math.ceil(ROOM_SECONDS * ctx.sampleRate), ctx.sampleRate);
+  const samples = ir.getChannelData(0);
+  let seed = 419;
+  for (let i = Math.round(0.012 * ctx.sampleRate); i < samples.length; i++) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    const seconds = i / ctx.sampleRate;
+    samples[i] = (seed / 2147483648 - 1) * Math.exp(-16 * seconds) * 0.023 * Math.sqrt(44100 / ctx.sampleRate);
+  }
+  for (const [time, gain] of [[0.015, 0.32], [0.027, -0.21], [0.041, 0.15]]) {
+    samples[Math.round(time * ctx.sampleRate)] += gain;
+  }
+  impulses.set(ctx, ir);
+  return ir;
+}
+
+/** 既存のドライ経路と並列。切断すると、直前の再生の残響もそこで止まる。 */
+export function connectRoom(ctx: BaseAudioContext, from: AudioNode, to: AudioNode, amount: number) {
+  const convolver = ctx.createConvolver();
+  convolver.normalize = false;
+  convolver.buffer = roomImpulse(ctx);
+  const wet = ctx.createGain();
+  wet.gain.value = amount;
+  from.connect(convolver);
+  convolver.connect(wet);
+  wet.connect(to);
+  return {
+    gain: wet.gain,
+    disconnect() {
+      from.disconnect(convolver);
+      convolver.disconnect();
+      wet.disconnect();
+    },
+  };
+}
+
 /** fx のデータからノード列を組む（bounce のオフライン側用）。素通しなら null。 */
 export function buildFxChain(
   ctx: BaseAudioContext,
