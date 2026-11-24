@@ -24,3 +24,11 @@ it("tracks known detuning and vibrato, leaving silence and unvoiced noise blank"
     expect(Math.abs((pitchMidi(f.hz!) - 57) * 100 - cents(f.time))).toBeLessThan(6);
   }
 });
+
+it("suppresses a lone periodic frame at the start of a selection", () => {
+  const rate = 48000;
+  // The window covers about 46 ms. One short periodic burst cannot establish a sung note.
+  const pcm = new Float32Array(rate / 4);
+  for (let i = 0; i < Math.round(rate * 0.042); i++) pcm[i] = 0.2 * Math.sin(2 * Math.PI * 145 * i / rate);
+  expect(detectPitch(pcm, rate).every((f) => f.hz === null)).toBe(true);
+});

@@ -47,5 +47,10 @@ export function detectPitch(pcm: Float32Array, sampleRate: number): PitchFrame[]
       break;
     }
   }
-  return frames;
+  // A single periodic window in a consonant can look like a low note. Require a
+  // voiced neighbour before presenting a pitch; use the original decisions on both sides.
+  return frames.map((frame, i) => {
+    if (frame.hz === null || frames[i - 1]?.hz || frames[i + 1]?.hz) return frame;
+    return { time: frame.time, hz: null };
+  });
 }
