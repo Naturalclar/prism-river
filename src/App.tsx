@@ -41,6 +41,7 @@ export default function App() {
   /* 端末内に保存済みプロジェクトがあるか。中身は使わず有無と日時だけ見る。 */
   const [savedAt, setSavedAt] = useState<number | null>(() => loadMetaSync()?.savedAt ?? null);
   const [storeBusy, setStoreBusy] = useState(false);
+  const restoring = useRef(false);
   const [auto, setAuto] = useState(autoSaveOn);
   /* 前回書いた音声。同じ顔ぶれなら音声は書き直さない（メタだけで済む）。 */
   const savedBlobs = useRef<Blob[] | null>(null);
@@ -92,7 +93,9 @@ export default function App() {
    * `openedByItself` は起動時に自分から戻したときで、そうと分かる文言にする。
    */
   const restoreInto = async (lead: string, openedByItself: boolean) => {
-    if (storeBusy) return;
+    // StrictMode can replay the mount effect before the busy state has rendered.
+    if (restoring.current || storeBusy) return;
+    restoring.current = true;
     setStoreBusy(true);
     engine.notify(openedByItself ? "前回のプロジェクトを読み込んでいます …" : "復元中 …");
     try {
@@ -116,6 +119,7 @@ export default function App() {
          理由だけ伝える。 */
       engine.notify(`復元に失敗しました: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
+      restoring.current = false;
       setStoreBusy(false);
     }
   };
