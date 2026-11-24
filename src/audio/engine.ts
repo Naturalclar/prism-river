@@ -1985,17 +1985,22 @@ export class Engine {
    * **仕様上、実時間かかる**。スピーカーには出さない（無音で録れる）。
    */
   async bounceWebm(): Promise<void> {
-    const dur = this.total();
-    if (!dur || this.exporting) return;
+    if (!this.total() || this.exporting) return;
     if (!webmSupported()) {
       this.say("このブラウザは webm (Opus) の録音に対応していません。WAV の書き出しを使ってください。");
       return;
     }
-    const ctx = this.audio();
-    if (ctx.state === "suspended") await ctx.resume();
     this.webmBusy = true;
-    this.say("webm 書き出し: まずミックスをレンダーしています …");
+    this.say("webm 書き出しを準備しています …");
     try {
+      const ctx = this.audio();
+      if (ctx.state === "suspended") await ctx.resume();
+      const dur = this.total();
+      if (!dur) {
+        this.say("書き出すトラックがありません。");
+        return;
+      }
+      this.say("webm 書き出し: まずミックスをレンダーしています …");
       const { rendered } = await this.renderMix(dur);
       const blob = await recordToWebm(ctx, rendered, (el, total) =>
         this.say(`webm 書き出し中（実時間）… ${el.toFixed(0)}s / ${total.toFixed(0)}s`),
