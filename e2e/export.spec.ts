@@ -184,3 +184,39 @@ for (const format of ["WAV", "選択WAV", "MP3", "webm"] as const) {
     await expect(audition).toBeVisible();
   });
 }
+
+test("WebMの再開待ちから他形式をロックし、再開拒否後はもう一度書き出せる", async ({ page }) => {
+  await page.evaluate(() => {
+    const decode = AudioContext.prototype.decodeAudioData;
+    AudioContext.prototype.decodeAudioData = async function (bytes) {
+      AudioContext.prototype.decodeAudioData = decode;
+      const buffer = await decode.call(this, bytes);
+      await this.suspend();
+      const resume = this.resume.bind(this);
+      this.resume = async () => {
+        this.resume = resume;
+        document.documentElement.dataset.resumePending = "yes";
+        await new Promise<void>((_, reject) => {
+          window.addEventListener("reject-resume", () => reject(new Error("resume failed")), { once: true });
+        });
+      };
+      return buffer;
+    };
+  });
+  await load(page, [makeTone("resume.wav", 440, 1)]);
+  const webm = page.getByRole("button", { name: /webm/ });
+  const wav = page.getByRole("button", { name: "ミックスを書き出す", exact: true });
+  const mp3 = page.getByRole("button", { name: /MP3 で書き出す/ });
+  await webm.click();
+  await expect(page.locator("html")).toHaveAttribute("data-resume-pending", "yes");
+  await expect(wav).toBeDisabled();
+  await expect(mp3).toBeDisabled();
+  await expect(webm).toBeDisabled();
+  await page.evaluate(() => window.dispatchEvent(new Event("reject-resume")));
+  await expect(page.getByTestId("log")).toContainText("resume failed");
+  await expect(wav).toBeEnabled();
+  await expect(mp3).toBeEnabled();
+  const download = page.waitForEvent("download");
+  await webm.click();
+  expect((await download).suggestedFilename()).toBe("prism-river-mix.webm");
+});
