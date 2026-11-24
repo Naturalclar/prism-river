@@ -129,3 +129,35 @@ test("トラックがあるときの読み込みは確認し、やめれば今�
   await expect(page.getByTestId("track-head")).toHaveCount(1);
   await expect(page.getByTestId("track-head")).toContainText("keep");
 });
+
+test(".prism の2本目が読めなくても現在のプロジェクトと保存済み音声が残る", async ({ page }) => {
+  await load(page, [makeTone("incoming1.wav", 440), makeTone("incoming2.wav", 660)]);
+  const prism = await exportPrism(page, "replace.prism");
+  await wipeAndReload(page);
+  await load(page, [makeTone("original.wav", 330)]);
+  await page.getByRole("button", { name: "プロジェクトを保存", exact: true }).click();
+  await expect(page.getByTestId("log")).toContainText("プロジェクトを保存しました");
+  await page.evaluate(() => {
+    const decode = AudioContext.prototype.decodeAudioData;
+    let count = 0;
+    AudioContext.prototype.decodeAudioData = async function (bytes) {
+      if (++count === 2) throw new Error("bad second track");
+      return decode.call(this, bytes);
+    };
+  });
+  page.once("dialog", (d) => void d.accept());
+  await page.setInputFiles("[data-testid=picker]", prism);
+  await expect(page.getByTestId("log")).toContainText("bad second track");
+  await expect(page.getByTestId("track-head")).toHaveText(/original/);
+  await page.waitForTimeout(1800);
+  await page.reload();
+  await expect(page.getByTestId("track-head")).toHaveText(/original/);
+
+  page.once("dialog", (d) => void d.accept());
+  await page.setInputFiles("[data-testid=picker]", prism);
+  await expect.poll(() => page.evaluate(() =>
+    JSON.parse(localStorage.getItem("prism-river.project")!).tracks.length,
+  )).toBe(2);
+  await page.reload();
+  await expect(page.getByTestId("track-head")).toHaveText([/incoming1/, /incoming2/]);
+});

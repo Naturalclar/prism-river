@@ -181,3 +181,44 @@ test("保存データが壊れていても起動でき、理由が出る", async
   /* 起動はできているので、そのまま読み込み直せる。 */
   await load(page, [makeTone("again.wav", 440)]);
 });
+
+test("復元中にリロード・デコード失敗があっても元の保存から再試行できる", async ({ page }) => {
+  await load(page, [makeTone("first.wav", 330), makeTone("second.wav", 550)]);
+  await page.getByRole("button", { name: "first のエフェクト", exact: true }).click();
+  await page.getByTestId("fx-comp").click();
+  await page.getByRole("button", { name: "プロジェクトを保存", exact: true }).click();
+  await expect(page.getByTestId("log")).toContainText("プロジェクトを保存しました");
+  const saved = () => page.evaluate(() => localStorage.getItem("prism-river.project"));
+  const original = await saved();
+
+  await page.addInitScript(() => {
+    let count = 0;
+    const decode = AudioContext.prototype.decodeAudioData;
+    AudioContext.prototype.decodeAudioData = async function (bytes) {
+      if (++count === 2) {
+        if (sessionStorage.getItem("interrupted")) throw new Error("test decode failure");
+        sessionStorage.setItem("interrupted", "yes");
+        await new Promise<void>(() => {});
+      }
+      return decode.call(this, bytes);
+    };
+  });
+  await page.reload();
+  await page.waitForFunction(() => sessionStorage.getItem("interrupted") === "yes");
+  // 2本目の復元を保留したまま、自動保存の待ち時間を超える。
+  await page.waitForTimeout(1800);
+  expect(await saved()).toBe(original);
+  await page.reload();
+  await expect(page.getByTestId("log")).toContainText("test decode failure");
+  await expect(page.getByTestId("track-head")).toHaveCount(0);
+  expect(await saved()).toBe(original);
+
+  await page.getByRole("button", { name: "前回を復元", exact: true }).click();
+  await expect(page.getByTestId("track-head")).toHaveCount(2);
+  await expect(page.getByTestId("track-head").nth(1)).toContainText("second");
+  await setRange(page, "[aria-label='first の音量']", 0.42);
+  await expect.poll(saved).not.toBe(original);
+  const meta = JSON.parse((await saved())!);
+  expect(meta.tracks).toHaveLength(2);
+  expect(meta.tracks[0].vol).toBe(0.42);
+});
