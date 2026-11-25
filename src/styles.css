@@ -293,6 +293,22 @@ input[type=range]::-moz-range-thumb{
   box-shadow:var(--shadow); padding:10px 12px;
   display:flex; flex-direction:column; gap:7px;
 }
+/* 同時に開いたロールとTSはスペースを分け、両方をクリックできるようにする。 */
+.pitch-editors.paired{
+  position:fixed; left:12px; right:12px; bottom:56px; z-index:21;
+  display:grid; grid-template-columns:minmax(0,1fr) 262px; align-items:end; gap:8px;
+  pointer-events:none;
+}
+.pitch-editors.paired > div{
+  position:static; width:auto; min-width:0; max-height:calc(100dvh - 72px);
+  overflow:auto; pointer-events:auto;
+}
+@media (max-width:680px){
+  .pitch-editors .rollpanel{max-height:34dvh; overflow:auto}
+  .pitch-editors .roll-grid{min-height:5rem}
+  .pitch-editors.paired{grid-template-columns:minmax(0,1fr)}
+  .pitch-editors.paired > div{max-height:calc((100dvh - 80px) / 2)}
+}
 .rollpanel .fx-top{display:flex; align-items:center; gap:8px}
 .rollpanel .fx-top b{font-size:12px; flex:1 1 auto}
 .rollpanel .fx-top span{
