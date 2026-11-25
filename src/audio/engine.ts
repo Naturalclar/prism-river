@@ -649,6 +649,8 @@ export class Engine {
     /* push は末尾に足すので、元の直後へ並べ直す。 */
     this.tracks.splice(this.tracks.indexOf(t), 1);
     this.tracks.splice(this.tracks.indexOf(src) + 1, 0, t);
+    t.rawBuf = src.rawBuf;
+    t.stretch = src.stretch ? { ...src.stretch } : null;
     t.vol = src.vol;
     t.panv = src.panv;
     t.pan.pan.value = src.panv;
