@@ -33,10 +33,18 @@ async function weightedRms(buffer: AudioBuffer): Promise<number> {
 
 export async function prepareComparison(ctx: AudioContext, tracks: Track[], master: number,
   buses: BusVols, selectedId: string, range: LoopRange) {
+  return prepareMixPair(ctx, tracks, tracks, master, buses, range, selectedId);
+}
+
+export type PreparedPair = Awaited<ReturnType<typeof prepareMixPair>>;
+
+export async function prepareMixPair(ctx: AudioContext, original: Track[], candidate: Track[], master: number,
+  buses: BusVols, range: LoopRange, bypassOriginal?: string) {
   const end = Math.min(range.end, range.start + MAX_COMPARE_SECONDS);
   // Include pre-roll for the compressor, EQ and room, even far into a long project.
   const origin = Math.max(0, Math.floor((range.start - 3) * ctx.sampleRate) / ctx.sampleRate);
-  const buffers = await Promise.all([selectedId, undefined].map(async (bypass) => {
+  const buffers = await Promise.all([original, candidate].map(async (tracks, index) => {
+    const bypass = index === 0 ? bypassOriginal : undefined;
     const { rendered } = await renderMix(ctx, tracks, master, buses, end, { origin, bypass });
     const start = Math.round(range.start * ctx.sampleRate) - Math.round(origin * ctx.sampleRate);
     const length = Math.round(end * ctx.sampleRate) - Math.round(range.start * ctx.sampleRate);

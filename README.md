@@ -313,3 +313,26 @@ Vite + TypeScript + React + oxlint + pnpm。
 生成したテスト音源は **`test-results/fixtures/<中身のハッシュ>/<名前>`** に置く。E2E は `fullyParallel` なので、共有ディレクトリに名前そのままで書くと「同じ名前・違う中身」を要求する2つのテストが同じパスを奪い合い、書きかけのファイルを読んだ側の `decodeAudioData` が落ちる——**トラックが1本足りない**という、読み込み経路の退行と見分けのつかない失敗になる。中身でパスを分け、書き込みは一時ファイル → `rename` で通す（`e2e/fixture.ts` の `put()`）。
 
 ローカルに別の Chromium がある環境では `CHROMIUM_PATH=/path/to/chrome pnpm test:e2e` で指定できる。
+
+## ブラウザ内ミックス操作 API
+
+音源の読み込みとルーラーでの範囲選択後、同じページのコンソールから操作できます。時間は秒、`gain` は線形倍率、`gainDbDelta` は現在値からの dB 差、`room` は 0〜1 の絶対値です。プレビューは選択先頭から最大12秒です。選択内の短い `range: { start, end }` も指定できます。
+
+```js
+const api = window.prismRiver;
+const { tracks, revision, range } = api.inspect();
+const vocal = tracks.find(t => t.name === "vocal"); // デモで指定した素材名
+if (!range || !vocal) throw new Error("対象と範囲を選んでください");
+const change = { trackId: vocal.id, gainDbDelta: 2 };
+const dry = await api.preview({ revision, changes: [change] });
+const wet = await api.preview({ revision, changes: [{ ...change, room: 0.35 }] });
+await api.listen(wet, "A"); // 元のミックス
+await api.listen(wet, "B"); // 同じ位置から音量を合わせた候補へ切り替え
+api.stop();
+const wav = api.wav(wet, "B"); // 試聴用の音量合わせを含まない WAV Blob
+api.discard(dry);
+api.apply(wet); // 選んだ案を適用
+api.undo(); // 直前の採用を1回で戻す
+```
+
+編集後に古い案を使うと例外の `code` が `stale_revision` になります。`inspect()` からやり直してください。案とUndoはページ内のメモリに保持します。
