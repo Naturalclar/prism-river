@@ -1,4 +1,5 @@
-import { expect, test, wavWindowPeak } from "./helpers";
+import { readFileSync } from "node:fs";
+import { expect, test, wavWindowHz, wavWindowPeak } from "./helpers";
 
 /**
  * ピアノロールでの打ち込み（#55）。ドラム（#54）と同じく手ぶらで始められるので、
@@ -144,4 +145,82 @@ test("音色・長さのボタンはラベルが1行に収まる", async ({ page
     }),
   );
   expect(overflowing.filter(Boolean)).toEqual([]);
+});
+
+test("最新のノート列を移調し、再編集・復元後も同じWAVになる", async ({ page }) => {
+  await page.setViewportSize({ width: 1450, height: 1000 });
+  await page.getByRole("button", { name: "打ち込みを追加" }).click();
+  await putC4(page, 0);
+  await page.getByRole("button", { name: "ピアノロールを閉じる" }).click();
+  await page.getByRole("button", { name: "打ち込み 1 のストレッチ" }).click();
+  await page.getByTestId("stretch-pitch").press("End");
+  await expect(page.getByTestId("stretch-pitch-val")).toHaveText("+12 半音");
+  const first = await exportMix(page);
+  expect(wavWindowPeak(first, 0, 0.2)).toBeGreaterThan(1000);
+  const hz = wavWindowHz(first, 0.03, 0.18);
+  expect(hz).toBeGreaterThan(490);
+  expect(hz).toBeLessThan(555);
+  await page.getByTestId("stretch-tempo-0.5").click();
+  await expect(page.locator(".clock i")).toHaveText("/ 00:04.00");
+  await page.getByRole("button", { name: "ストレッチを閉じる" }).click();
+  await page.getByRole("button", { name: "打ち込み 1 のロール" }).click();
+  // 次のレンダーが終わる前にもう1音を置く。
+  await page.evaluate(() => {
+    for (const step of [4, 8]) document.querySelector<HTMLButtonElement>(`[data-testid=roll-60-${step}]`)!.click();
+  });
+  await expect(page.getByTestId("roll-60-4")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("roll-60-8")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".clock i")).toHaveText("/ 00:04.00");
+  const edited = await exportMix(page);
+  for (const sec of [0, 1, 2]) {
+    expect(wavWindowPeak(edited, sec, sec + 0.2)).toBeGreaterThan(1000);
+    const shifted = wavWindowHz(edited, sec + 0.08, sec + 0.28);
+    expect(shifted).toBeGreaterThan(490);
+    expect(shifted).toBeLessThan(555);
+  }
+  await page.getByRole("button", { name: "プロジェクトを保存", exact: true }).click();
+  await expect(page.getByTestId("log")).toContainText("保存しました");
+  await page.reload();
+  await expect(page.getByTestId("track-head")).toHaveCount(1);
+  expect(readFileSync(await exportMix(page)).equals(readFileSync(edited))).toBe(true);
+  await page.getByRole("button", { name: "打ち込み 1 のストレッチ" }).click();
+  await page.getByTestId("stretch-reset").click();
+  await expect(page.locator(".clock i")).toHaveText("/ 00:02.00");
+  const reset = await exportMix(page);
+  const natural = wavWindowHz(reset, 1.03, 1.18);
+  expect(natural).toBeGreaterThan(245);
+  expect(natural).toBeLessThan(280);
+});
+
+test("移調中の編集は順に反映し、再計算失敗後も元の音から編集を続けられる", async ({ page }) => {
+  await page.getByRole("button", { name: "打ち込みを追加" }).click();
+  await putC4(page, 0);
+  await page.getByRole("button", { name: "打ち込み 1 のストレッチ" }).click();
+  await page.evaluate(() => {
+    const send = Worker.prototype.postMessage;
+    let count = 0;
+    Worker.prototype.postMessage = function(data, transfer) {
+      if (data.params && ++count === 2) {
+        this.dispatchEvent(new MessageEvent("message", { data: { ok: false, error: "再計算失敗" } }));
+        return;
+      }
+      if (data.params && count === 1) {
+        setTimeout(() => Reflect.apply(send, this, [data, transfer]), 150);
+      } else {
+        Reflect.apply(send, this, [data, transfer]);
+      }
+    };
+  });
+  await page.getByTestId("stretch-pitch").press("End");
+  await page.getByTestId("roll-60-8").click();
+  await expect(page.getByTestId("log")).toContainText("再計算失敗");
+  await expect(page.getByTestId("roll-60-8")).toHaveAttribute("aria-pressed", "false");
+  const unchanged = await exportMix(page);
+  expect(wavWindowPeak(unchanged, 0, 0.2)).toBeGreaterThan(1000);
+  expect(wavWindowPeak(unchanged, 1, 1.2)).toBeLessThan(10);
+  await putC4(page, 8);
+  const repaired = await exportMix(page);
+  const hz = wavWindowHz(repaired, 1.03, 1.18);
+  expect(hz).toBeGreaterThan(490);
+  expect(hz).toBeLessThan(555);
 });
