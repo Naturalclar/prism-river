@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { expect, test, wavWindowPeak } from "./helpers";
 
 /**
@@ -125,4 +126,35 @@ test("ドラムが2本あるとき、選択を変えると格子もそのトラ�
   await expect(title).toHaveText("ドラム 1");
   await expect(heads.nth(0)).toHaveClass(/selected/);
   await expect(heads.nth(1)).not.toHaveClass(/selected/);
+});
+
+test("個別TS後のドラムは最新の格子を使い、再編集と復元でも発音位置を保つ", async ({ page }) => {
+  await page.getByRole("button", { name: "ドラムを追加" }).click();
+  await page.getByTestId("drum-preset-empty").click();
+  await expect(page.getByTestId("drum-kick-0")).toHaveAttribute("aria-pressed", "false");
+  await page.getByRole("button", { name: "ドラム 1 のストレッチ" }).click();
+  await page.getByTestId("stretch-pitch").press("ArrowRight");
+  await expect(page.getByTestId("stretch-pitch-val")).toHaveText("+1 半音");
+  async function wav() {
+    const wait = page.waitForEvent("download");
+    await page.getByRole("button", { name: "ミックスを書き出す", exact: true }).click();
+    const path = await (await wait).path();
+    if (!path) throw new Error("missing WAV");
+    return path;
+  }
+  expect(wavWindowPeak(await wav(), 0, 3.9)).toBe(0);
+  await page.getByTestId("stretch-tempo-0.5").click();
+  await expect(page.locator(".clock i")).toHaveText("/ 00:08.00");
+  await page.getByTestId("drum-kick-8").click();
+  await expect(page.getByTestId("drum-kick-8")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".clock i")).toHaveText("/ 00:08.00");
+  const edited = await wav();
+  expect(wavWindowPeak(edited, 0, 1.5)).toBe(0);
+  expect(wavWindowPeak(edited, 2, 2.3)).toBeGreaterThan(2000);
+  expect(wavWindowPeak(edited, 6, 6.3)).toBeGreaterThan(2000);
+  await page.getByRole("button", { name: "プロジェクトを保存", exact: true }).click();
+  await expect(page.getByTestId("log")).toContainText("保存しました");
+  await page.reload();
+  await expect(page.getByTestId("track-head")).toHaveCount(1);
+  expect(readFileSync(await wav()).equals(readFileSync(edited))).toBe(true);
 });
