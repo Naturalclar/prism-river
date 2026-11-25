@@ -224,3 +224,20 @@ test("移調中の編集は順に反映し、再計算失敗後も元の音か�
   expect(hz).toBeGreaterThan(490);
   expect(hz).toBeLessThan(555);
 });
+
+for (const width of [1450, 390]) {
+  test(`TSとピアノロールを同時にクリックできる（${width}px）`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.getByRole("button", { name: "打ち込みを追加" }).click();
+    await page.getByRole("button", { name: "打ち込み 1 のストレッチ" }).click();
+    await page.getByTestId("stretch-tempo-0.5").click();
+    await expect(page.getByTestId("stretch-tempo-val")).toHaveText("0.50x");
+    await putC4(page, 4);
+    const roll = await page.getByTestId("rollpanel").boundingBox();
+    const ts = await page.getByTestId("stretchpanel").boundingBox();
+    if (!roll || !ts) throw new Error("panel missing");
+    expect(roll.x + roll.width <= ts.x || roll.y + roll.height <= ts.y).toBe(true);
+    await page.getByRole("button", { name: "ストレッチを閉じる" }).click();
+    await expect(page.getByTestId("roll-60-4")).toHaveAttribute("aria-pressed", "true");
+  });
+}

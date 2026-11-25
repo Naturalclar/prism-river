@@ -306,8 +306,10 @@ export default function App() {
 
       <FxPanel snap={snap} />
       <DrumPanel snap={snap} />
-      <RollPanel snap={snap} />
-      <StretchPanel snap={snap} />
+      <div className={snap.rollId && snap.stretchId ? "pitch-editors paired" : "pitch-editors"}>
+        <RollPanel snap={snap} />
+        <StretchPanel snap={snap} />
+      </div>
       {menu && <ContextMenu at={menu} onClose={() => setMenu(null)} />}
       <Probe snap={snap} />
     </>
