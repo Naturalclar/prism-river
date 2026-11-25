@@ -1,5 +1,6 @@
 import { MAX_PITCH_SECONDS } from "../lib/pitch";
-import { playComparison, prepareComparison, type CompareSide } from "./comparison";
+import { MixPlans } from "./mix-plans";
+import { playComparison, prepareComparison, prepareMixPair, type PreparedPair, type CompareSide } from "./comparison";
 import { encodeMp3InWorker } from "./mp3";
 import {
   decodeDrumPattern,
@@ -163,6 +164,15 @@ export class Engine {
   private masterVol = DEFAULT_MASTER_VOL;
   private lastRender: AudioBuffer | null = null;
   private mixRevision = 0;
+  private listeningPlan: string | null = null;
+  readonly mixPlans = new MixPlans({
+    tracks: () => this.tracks,
+    selection: () => this.loop,
+    render: (candidate, range) => prepareMixPair(this.audio(), this.tracks, candidate, this.masterVol, this.busVol, range),
+    listen: (id, pair, side) => this.listenToPlan(id, pair, side),
+    stop: id => { if (this.listeningPlan === id) this.cancelComparison(); },
+    write: values => this.writeMixValues(values),
+  });
   private selectedId: string | null = null;
   private fxId: string | null = null;
   private drumsId: string | null = null;
@@ -303,6 +313,7 @@ export class Engine {
   }
 
   private notifyProjectChanged(): void {
+    this.mixPlans.changed();
     for (const fn of this.touchListeners) fn();
   }
 
@@ -881,6 +892,7 @@ export class Engine {
     for (const { m, blob, buf, ms, drums, roll, stretch, stretched } of prepared) {
       this.decodeTotal += ms;
       const t = this.push(m.name, m.srcName, blob, buf, ms);
+      if (typeof m.id === "string" && /^t[a-z0-9]+$/.test(m.id) && !this.find(m.id)) t.id = m.id;
       t.midiChannel = m.midiChannel ?? null;
       t.drums = drums;
       t.roll = roll;
@@ -1388,8 +1400,16 @@ export class Engine {
   setVol(id: string, v: number): void {
     const t = this.find(id);
     if (!t) return;
-    t.vol = v;
+    this.writeMixValues([{ track: t, vol: v }]);
+  }
+
+  private writeMixValues(values: { track: Track; vol?: number; room?: number }[]): void {
+    for (const { track, vol, room } of values) {
+      if (vol !== undefined) track.vol = vol;
+      if (room !== undefined) track.fx.room = room;
+    }
     this.balance();
+    for (const { track, room } of values) if (room !== undefined) this.syncRoom(track);
     this.touched();
   }
 
@@ -1588,9 +1608,7 @@ export class Engine {
   setRoom(id: string, amount: number): void {
     const t = this.find(id);
     if (!t) return;
-    t.fx.room = clamp(amount, 0, 1);
-    this.syncRoom(t);
-    this.touched();
+    this.writeMixValues([{ track: t, room: clamp(amount, 0, 1) }]);
   }
 
   /** EQ のバンドゲイン（dB）。常設ノードなので再生中でも即座に効く。 */
@@ -2111,6 +2129,7 @@ export class Engine {
   private cancelComparison(): void {
     if (this.compare === null) return;
     this.compareGeneration++;
+    this.listeningPlan = null;
     this.comparison?.stop();
     this.comparison = null;
     this.compare = null;
@@ -2126,6 +2145,30 @@ export class Engine {
     this.comparison.select(side);
     this.compare = side;
     this.emit();
+  }
+
+  private async listenToPlan(id: string, pair: PreparedPair, side: CompareSide): Promise<void> {
+    if (this.listeningPlan === id && this.comparison) {
+      this.switchComparison(side);
+      return;
+    }
+    this.cancelComparison();
+    this.halt();
+    this.stopAudition();
+    const ctx = this.audio();
+    const generation = ++this.compareGeneration;
+    this.listeningPlan = id;
+    this.compare = "preparing";
+    this.emit();
+    try {
+      if (ctx.state === "suspended") await ctx.resume();
+      if (generation !== this.compareGeneration || !this.monitor) return;
+      this.comparison = playComparison(ctx, this.monitor, pair);
+      this.switchComparison(side);
+    } catch (err) {
+      if (generation === this.compareGeneration) this.cancelComparison();
+      throw err;
+    }
   }
 
   async compareFx(id: string): Promise<void> {

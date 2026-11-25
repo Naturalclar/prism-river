@@ -21,6 +21,7 @@ export function projectMetaOf(
     busVol: { ...busVol },
     loop: loop ? { ...loop } : null,
     tracks: tracks.map((t) => ({
+      id: t.id,
       name: t.name,
       srcName: t.srcName,
       vol: t.vol,

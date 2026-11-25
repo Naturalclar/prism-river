@@ -38,6 +38,7 @@ export const BUS_IDS: readonly BusId[] = ["strings", "winds", "keys"];
 export type BusVols = Record<BusId, number>;
 
 export type TrackMeta = {
+  id?: string;
   name: string;
   /** 元ファイル名（拡張子つき）。復元時の表示と再保存に使う。 */
   srcName: string;
