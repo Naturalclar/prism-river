@@ -63,13 +63,17 @@ export async function openMic(
   }
 }
 
-/** 停止後の後始末。エンコード済みチャンクをまとめて返す。 */
-export function collectRecording(rec: RecSession): Blob {
+/** 停止・破棄どちらでもマイクの入力をすぐに解放する。 */
+export function releaseRecording(rec: RecSession): void {
   for (const trk of rec.stream.getTracks()) trk.stop();
   try {
     rec.source.disconnect();
   } catch {
     /* 既に切れている */
   }
+}
+
+export function collectRecording(rec: RecSession): Blob {
+  releaseRecording(rec);
   return new Blob(rec.chunks, { type: rec.recorder.mimeType || "audio/webm" });
 }

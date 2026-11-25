@@ -44,7 +44,7 @@ import { stretchInWorker } from "./stretch";
 import { decodeMidiRec, encodeMidiRec, songFromEvents } from "../lib/midirec";
 import { openMidiIn, type MidiInSession } from "./midiin";
 import { projectMetaOf } from "./project";
-import { collectRecording, openMic, type RecSession } from "./recorder";
+import { collectRecording, openMic, releaseRecording, type RecSession } from "./recorder";
 import {
   BUS_INFO,
   defaultFx,
@@ -138,6 +138,7 @@ export class Engine {
   private tracks: Track[] = [];
   /** 録音セッション。マイクのストリームと入力レベル用のアナライザを持つ。 */
   private rec: RecSession | null = null;
+  private projectGeneration = 0;
   private openingMic = false;
   private recRaf = 0;
   private recCount = 0;
@@ -801,6 +802,7 @@ export class Engine {
    * 確認したうえで消す。
    */
   newProject(): number {
+    this.resetRecordingForProject();
     const n = this.tracks.length;
     this.halt(true);
     this.seekAt = 0;
@@ -871,6 +873,7 @@ export class Engine {
       prepared.push({ m, blob: blobs[i], buf, ms, drums, roll, stretch, stretched });
     }
 
+    this.resetRecordingForProject();
     this.halt(true);
     this.seekAt = 0;
     this.loop = null;
@@ -1130,18 +1133,41 @@ export class Engine {
     void this.startRecording();
   }
 
+  private resetRecordingForProject(): void {
+    this.projectGeneration++;
+    cancelAnimationFrame(this.recRaf);
+    if (this.rec) this.discardMic(this.rec);
+    this.rec = null;
+    this.take = null;
+    this.openingMic = false;
+    this.midiIn?.close();
+    this.midiIn = null;
+    this.openingMidi = false;
+  }
+
+  private discardMic(rec: RecSession): void {
+    if (rec.recorder.state !== "inactive") rec.recorder.stop();
+    releaseRecording(rec);
+  }
+
   private async startRecording(): Promise<void> {
     if (this.rec || this.openingMic) return;
+    const generation = this.projectGeneration;
     this.openingMic = true;
     this.say("マイクを準備しています …");
     let res;
     try {
-      res = await openMic(this.audio(), () => void this.finishRecording());
+      res = await openMic(this.audio(), () => {
+        if (generation === this.projectGeneration) void this.finishRecording();
+      });
     } catch (err) {
       res = { error: `録音を開始できませんでした: ${err instanceof Error ? err.message : String(err)}` };
-    } finally {
-      this.openingMic = false;
     }
+    if (generation !== this.projectGeneration) {
+      if ("rec" in res) this.discardMic(res.rec);
+      return;
+    }
+    this.openingMic = false;
     if ("error" in res) {
       this.say(res.error);
       return;
@@ -1164,6 +1190,7 @@ export class Engine {
     const rec = this.rec;
     const take = this.take;
     if (!rec || !take) return;
+    const generation = this.projectGeneration;
     const name = `録音 ${this.recCount}`;
     this.rec = null;
     cancelAnimationFrame(this.recRaf);
@@ -1178,6 +1205,7 @@ export class Engine {
       const bytes = await blob.arrayBuffer();
       const t0 = performance.now();
       const buf = await this.audio().decodeAudioData(bytes);
+      if (generation !== this.projectGeneration) return;
       const ms = performance.now() - t0;
       this.decodeTotal += ms;
       /* 保存（#18）用に、エンコード済みの録音チャンクを元ファイルとして持たせる。 */
@@ -1200,6 +1228,7 @@ export class Engine {
       /* 録音もトラックが増える＝音に効く変更。自動保存（#80）に乗せる。 */
       this.touched();
     } catch {
+      if (generation !== this.projectGeneration) return;
       /* 本物が出ないので、仮クリップも消す（残すと差し替わらないまま居座る）。 */
       if (this.take === take) this.take = null;
       this.say("録音をデコードできませんでした（この形式はブラウザが対応していません）");
@@ -1243,6 +1272,7 @@ export class Engine {
 
   private async startMidiRecord(): Promise<void> {
     if (this.midiIn || this.openingMidi) return;
+    const generation = this.projectGeneration;
     this.openingMidi = true;
     this.say("MIDI 入力を準備しています …");
     const res = await openMidiIn((e) => {
@@ -1253,6 +1283,10 @@ export class Engine {
     }).catch((err: unknown) => ({
       error: `MIDI 入力を準備できませんでした: ${err instanceof Error ? err.message : String(err)}`,
     }));
+    if (generation !== this.projectGeneration) {
+      if ("midi" in res) res.midi.close();
+      return;
+    }
     this.openingMidi = false;
     if ("error" in res) {
       this.say(res.error);
@@ -1265,6 +1299,7 @@ export class Engine {
 
   /** 停止 → ノート化 → 内蔵シンセでレンダー → トラック化。 */
   private async finishMidiRecord(): Promise<void> {
+    const generation = this.projectGeneration;
     const session = this.midiIn;
     if (!session) return;
     this.midiIn = null;
@@ -1280,6 +1315,7 @@ export class Engine {
     if (ctx.state === "suspended") await ctx.resume();
     this.say(`MIDI 録音をレンダー中（${song.notes.length}音）…`);
     const r = await renderMidi(song, ctx.sampleRate);
+    if (generation !== this.projectGeneration) return;
     this.decodeTotal += r.ms;
     const name = `MIDI 録音 ${++this.midiRecCount}`;
     /* 元ファイルが無い生成トラックなので、srcBytes はノート列の JSON

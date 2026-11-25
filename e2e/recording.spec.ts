@@ -249,3 +249,31 @@ for (const failFirst of [false, true]) {
     await expect(page.getByTestId("clip").last()).toHaveCSS("left", "210px");
   });
 }
+
+test("新規プロジェクトに前の録音のデコード結果を保存しない", async ({ page }) => {
+  await load(page, [makeTone("old-project.wav", 330)]);
+  await page.getByRole("button", { name: "マイクから録音", exact: true }).click();
+  await expect.poll(() => canvasPixelSum(page, "[data-testid=rec-canvas]", 0.3)).toBeGreaterThan(0);
+  await page.evaluate(() => {
+    const decode = AudioContext.prototype.decodeAudioData;
+    AudioContext.prototype.decodeAudioData = async function (bytes) {
+      AudioContext.prototype.decodeAudioData = decode;
+      const buffer = await decode.call(this, bytes);
+      document.documentElement.dataset.oldRecording = "held";
+      await new Promise<void>(resolve => window.addEventListener("finish-old", () => resolve(), { once: true }));
+      return buffer;
+    };
+  });
+  await page.getByRole("button", { name: "録音を停止", exact: true }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-old-recording", "held");
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("button", { name: "新規プロジェクト", exact: true }).click();
+  await expect(page.getByTestId("log")).toContainText("新規プロジェクトを始めました");
+  await page.evaluate(() => window.dispatchEvent(new Event("finish-old")));
+  await page.waitForTimeout(1600);
+  await expect(page.getByTestId("track-head")).toHaveCount(0);
+  await expect(page.getByTestId("rec-clip")).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByRole("button", { name: "新規プロジェクト", exact: true })).toBeDisabled();
+  await expect(page.getByTestId("track-head")).toHaveCount(0);
+});
