@@ -129,3 +129,32 @@ test("保存 → リロード → 復元でストレッチが戻る", async ({ p
   await openPanel(page, "keepts");
   await expect(page.getByTestId("stretch-tempo-val")).toHaveText("0.50x");
 });
+
+test("複製したトラックは元音源から掛け直し、保存後も移調と尺を保つ", async ({ page }) => {
+  await load(page, [makeTone("source.wav", 220, 3)]);
+  await openPanel(page, "source");
+  await page.getByTestId("stretch-tempo-0.5").click();
+  await expect(page.getByTestId("stretch-tempo-val")).toHaveText("0.50x");
+  const pitch = page.getByTestId("stretch-pitch");
+  await pitch.press("End");
+  await expect(page.getByTestId("stretch-pitch-val")).toHaveText("+12 半音");
+  await page.getByTestId("track-head").first().click({ button: "right" });
+  await page.getByRole("menuitem", { name: "複製" }).click();
+  await page.getByRole("button", { name: "source のコピー をソロ" }).click();
+  await expect(page.getByTestId("stretch-pitch-val")).toHaveText("+12 半音");
+  await expect(page.getByTestId("stretch-tempo-val")).toHaveText("0.50x");
+  await pitch.press("ArrowLeft");
+  await expect(page.getByTestId("stretch-pitch-val")).toHaveText("+11 半音");
+  const hz = wavWindowHz(await exportWav(page), 3.5, 4.5);
+  expect(hz).toBeGreaterThan(400);
+  expect(hz).toBeLessThan(430);
+  await page.getByRole("button", { name: "プロジェクトを保存", exact: true }).click();
+  await expect(page.getByTestId("log")).toContainText("保存しました");
+  await page.reload();
+  await expect(page.getByTestId("track-head")).toHaveCount(2);
+  await openPanel(page, "source のコピー");
+  await expect(page.getByTestId("stretch-pitch-val")).toHaveText("+11 半音");
+  expect(wavWindowHz(await exportWav(page), 3.5, 4.5)).toBe(hz);
+  await openPanel(page, "source");
+  await expect(page.getByTestId("stretch-pitch-val")).toHaveText("+12 半音");
+});
