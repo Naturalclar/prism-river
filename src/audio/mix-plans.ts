@@ -119,6 +119,10 @@ export class MixPlans {
 
   discard(ref: PlanRef): void {
     this.get(ref);
+    this.release(ref);
+  }
+
+  release(ref: PlanRef): void {
     this.host.stop(ref.id);
     this.plans.delete(ref.id);
   }
@@ -128,6 +132,8 @@ export class MixPlans {
     plan.apply();
     this.undoLast = plan.undo;
   }
+
+  get canUndo(): boolean { return this.undoLast !== null; }
 
   undo(): void {
     const undo = this.undoLast;

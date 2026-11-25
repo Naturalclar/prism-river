@@ -1,3 +1,4 @@
+import { GroupPitch } from "./GroupPitch";
 import { engine } from "../audio/instance";
 import type { Snapshot } from "../audio/engine";
 import {
@@ -101,6 +102,7 @@ export function StretchPanel({ snap }: { snap: Snapshot }) {
         {/* 掛け直しは尺に比例して時間がかかる。押せない理由が分かるようにする。 */}
         <span className="fx-note">{t.stretching ? "計算中…" : "テンポとピッチは独立"}</span>
       </div>
+      <GroupPitch tracks={snap.tracks} />
     </div>
   );
 }
