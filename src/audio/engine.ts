@@ -1,6 +1,7 @@
 import { MAX_PITCH_SECONDS } from "../lib/pitch";
+import { prepareGroupPitch, type PitchState } from "./group-pitch";
 import { MixPlans } from "./mix-plans";
-import { playComparison, prepareComparison, prepareMixPair, type PreparedPair, type CompareSide } from "./comparison";
+import { MAX_COMPARE_SECONDS, playComparison, prepareComparison, prepareMixPair, type PreparedPair, type CompareSide } from "./comparison";
 import { encodeMp3InWorker } from "./mp3";
 import {
   decodeDrumPattern,
@@ -1740,6 +1741,36 @@ export class Engine {
     t.fadeOut = clamp(rescaleSeconds(t.fadeOut, from, to), 0, Math.max(0, eff - t.fadeIn));
   }
 
+  async previewGroupPitch(ids: string[], delta: number, signal: AbortSignal) {
+    const revision = this.mixPlans.inspect().revision;
+    const total = this.total();
+    const cursor = this.now();
+    const start = this.loop?.start ?? (cursor < total ? cursor : 0);
+    const end = Math.min(this.loop?.end ?? total, start + MAX_COMPARE_SECONDS);
+    if (end - start < 1 / this.audio().sampleRate) throw new Error("試聴できる範囲を選んでください。");
+    const check = () => {
+      signal.throwIfAborted();
+      this.mixPlans.check(revision);
+    };
+    const idle = () => {
+      const busy = this.tracks.find(t => ids.includes(t.id) && this.stretching.has(t.id));
+      if (busy) throw new Error(busy.name + " のストレッチが完了してから試してください。");
+    };
+    idle();
+    const { candidate, before, after } = await prepareGroupPitch(this.audio(), this.tracks, ids, delta, signal, check);
+    check();
+    const commit = (states: PitchState[]) => {
+      idle();
+      for (const { track, buf, raw, stretch } of states) {
+        track.rawBuf = raw;
+        this.putStretched(track, buf, stretch, false);
+      }
+      this.rebuildIfPlaying();
+      this.touched();
+    };
+    return this.mixPlans.prepare(revision, { start, end }, candidate, () => commit(after), () => commit(before));
+  }
+
   /** 「テンポ 0.75x / ピッチ +2半音」のような表示。ログとテレメトリで共有する。 */
   private stretchLabel(p: StretchParams): string {
     const semi = p.semitones === 0 ? "±0" : `${p.semitones > 0 ? "+" : ""}${p.semitones}`;
@@ -1773,11 +1804,12 @@ export class Engine {
     }
 
     const ctx = this.audio();
-    if (ctx.state === "suspended") await ctx.resume();
     this.stretching.add(id);
     this.say(`${t.name} — ${this.stretchLabel(next)} を計算中…`);
     this.emit();
     try {
+      if (ctx.state === "suspended") await ctx.resume();
+      if (gen !== this.stretchGen.get(id) || !this.tracks.includes(t)) return;
       const { buf, ms } = await stretchInWorker(ctx, t.rawBuf, next);
       /* 古い世代・消えたトラックの結果は捨てる（表示中の音を勝手に差し替えない）。 */
       if (gen !== this.stretchGen.get(id) || !this.tracks.includes(t)) return;
@@ -2145,6 +2177,10 @@ export class Engine {
     this.comparison.select(side);
     this.compare = side;
     this.emit();
+  }
+
+  sideForPlan(id: string) {
+    return this.listeningPlan === id ? this.compare : null;
   }
 
   private async listenToPlan(id: string, pair: PreparedPair, side: CompareSide): Promise<void> {

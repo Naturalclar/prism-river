@@ -246,7 +246,11 @@ input[type=range]::-moz-range-thumb{
 .fxpanel:has(.pitch-panel){max-height:calc(100dvh - 72px); overflow-y:auto}
 
 /* タイムストレッチ（#25）。FX パネルと同じ作りで、重ならないよう右端に置く。 */
-.stretchpanel{left:auto; right:12px; width:262px}
+.stretchpanel{left:auto; right:12px; width:262px; max-height:calc(100dvh - 72px); overflow:auto}
+.group-pitch{display:grid; gap:6px; font-size:12px}
+.group-pitch fieldset{max-height:8rem; overflow:auto; border:1px solid var(--line-strong)}
+.group-pitch fieldset label{display:block; overflow-wrap:anywhere}
+.group-pitch input[type=number]{width:4rem}
 .seg-row{display:flex; align-items:center; gap:5px; flex-wrap:wrap}
 .seg-row .ghost{padding:3px 8px; font-size:10.5px}
 .fx-note{font-size:9.5px; color:var(--text-faint); margin-left:auto}

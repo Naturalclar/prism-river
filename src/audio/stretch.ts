@@ -14,14 +14,19 @@ export function stretchInWorker(
   ctx: BaseAudioContext,
   buf: AudioBuffer,
   params: StretchParams,
+  signal?: AbortSignal,
 ): Promise<{ buf: AudioBuffer; ms: number }> {
   return new Promise((resolve, reject) => {
+    signal?.throwIfAborted();
     const w = new Worker(new URL("./stretchworker.ts", import.meta.url), { type: "module" });
+    const abort = () => done(() => reject(signal?.reason));
     const done = (fn: () => void) => {
+      signal?.removeEventListener("abort", abort);
       w.terminate();
       fn();
     };
 
+    signal?.addEventListener("abort", abort, { once: true });
     w.addEventListener(
       "message",
       (e: MessageEvent<{ ok: boolean; channels?: Float32Array<ArrayBuffer>[]; ms?: number; error?: string }>) => {
@@ -31,20 +36,28 @@ export function stretchInWorker(
           return;
         }
         const { channels, ms } = d;
-        const out = ctx.createBuffer(channels.length, channels[0].length, buf.sampleRate);
-        channels.forEach((ch, i) => out.copyToChannel(ch, i));
-        done(() => resolve({ buf: out, ms }));
+        try {
+          const out = ctx.createBuffer(channels.length, channels[0].length, buf.sampleRate);
+          channels.forEach((ch, i) => out.copyToChannel(ch, i));
+          done(() => resolve({ buf: out, ms }));
+        } catch (err) {
+          done(() => reject(err));
+        }
       },
     );
     w.addEventListener("error", (e) =>
       done(() => reject(new Error(e.message || "ストレッチ Worker の起動に失敗しました"))),
     );
 
-    const channels: Float32Array<ArrayBuffer>[] = [];
-    for (let c = 0; c < buf.numberOfChannels; c++) channels.push(buf.getChannelData(c).slice());
-    w.postMessage(
-      { channels, sampleRate: buf.sampleRate, params },
-      channels.map((c) => c.buffer),
-    );
+    try {
+      const channels: Float32Array<ArrayBuffer>[] = [];
+      for (let c = 0; c < buf.numberOfChannels; c++) channels.push(buf.getChannelData(c).slice());
+      w.postMessage(
+        { channels, sampleRate: buf.sampleRate, params },
+        channels.map((c) => c.buffer),
+      );
+    } catch (err) {
+      done(() => reject(err));
+    }
   });
 }
