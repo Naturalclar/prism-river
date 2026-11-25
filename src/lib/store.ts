@@ -343,17 +343,6 @@ export async function clearProject(): Promise<void> {
   lastAudio = null;
 }
 
-/** ストレージの空き（bytes）。見積もりが取れない環境では null。 */
-export async function freeBytes(): Promise<number | null> {
-  try {
-    const est = await navigator.storage?.estimate?.();
-    if (!est || !num(est.quota) || !num(est.usage)) return null;
-    return Math.max(0, est.quota - est.usage);
-  } catch {
-    return null;
-  }
-}
-
 /**
  * ブラウザ都合の自動削除を減らすための永続化要求。拒否されても保存自体は
  * 成立する（evictable なだけ）ので、結果は気にしない。

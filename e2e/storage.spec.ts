@@ -315,3 +315,24 @@ test("別タブが音声を入れ替えた後の自動保存でも、設定と�
     await other.close();
   }
 });
+
+test("空き容量の見積もりが音声より小さくても設定だけ手動保存できる", async ({ page }) => {
+  await page.getByTestId("autosave").click();
+  await load(page, [makeTone("quota.wav", 440)]);
+  const save = page.getByRole("button", { name: "プロジェクトを保存", exact: true });
+  await save.click();
+  await expect(page.getByTestId("log")).toContainText("プロジェクトを保存しました");
+  await page.evaluate(() => {
+    navigator.storage.estimate = async () => ({ usage: 1000000, quota: 1008192 });
+    const put = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function (...args) {
+      if (this.name === "audio") throw new Error("unexpected audio rewrite");
+      return put.apply(this, args);
+    };
+  });
+  await setRange(page, "#mVol", 0.42);
+  await save.click();
+  await expect.poll(async () => (await savedProject(page))?.masterVol).toBe(0.42);
+  await page.reload();
+  await expect(page.locator("#mVol")).toHaveValue("0.42");
+});

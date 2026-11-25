@@ -19,7 +19,6 @@ import { TrackHead } from "./components/TrackHead";
 import {
   autoSaveOn,
   clearProject,
-  freeBytes,
   loadProject,
   saveProject,
   setAutoSaveOn,
@@ -61,13 +60,6 @@ export default function App() {
     setStoreBusy(true);
     try {
       const size = p.blobs.reduce((n, b) => n + b.size, 0);
-      const free = await freeBytes();
-      if (free !== null && size > free) {
-        engine.notify(
-          `保存できません: 音声 ${(size / 1048576).toFixed(1)}MB がブラウザの空き容量（約 ${(free / 1048576).toFixed(0)}MB）を超えています。`,
-        );
-        return;
-      }
       await saveProject(p.meta, p.blobs);
       setSavedAt(p.meta.savedAt);
       engine.notify(
