@@ -184,11 +184,10 @@ export class Engine {
   private stretching = new Set<string>();
   private stretchGen = new Map<string, number>();
   private rollCount = 0;
-  /** 同じ打ち込みトラックのノート編集とTSを入力順に適用する。 */
-  private rollEdits = new WeakMap<Track, Promise<void>>();
+  /** 同じトラックのパターン編集とTSを入力順に適用する。 */
+  private patternEdits = new WeakMap<Track, Promise<void>>();
   private pendingRollChanges = new WeakMap<Track, Array<(roll: RollPattern) => RollPattern>>();
-  /** ドラムの再レンダーは非同期なので、古い結果で上書きしないための世代。 */
-  private drumGen = 0;
+  private pendingDrumChanges = new WeakMap<Track, Array<(pattern: DrumPattern) => DrumPattern>>();
   private auditionSrc: AudioBufferSourceNode | null = null;
   private bouncing = false;
   private webmBusy = false;
@@ -946,21 +945,15 @@ export class Engine {
   private async renderDrumsInto(t: Track, pattern: DrumPattern): Promise<void> {
     const ctx = this.audio();
     if (ctx.state === "suspended") await ctx.resume();
-    /* 連打されると古いレンダーが後から返ることがあるので、最後の1回だけ採る。 */
-    const gen = ++this.drumGen;
-    const { buf, ms, hits } = await renderDrums(pattern, ctx.sampleRate);
-    if (gen !== this.drumGen || !this.tracks.includes(t)) return;
+    const { buf: raw, ms, hits } = await renderDrums(pattern, ctx.sampleRate);
+    if (!this.tracks.includes(t)) return;
+    const buf = t.stretch ? (await stretchInWorker(ctx, raw, t.stretch)).buf : raw;
+    if (!this.tracks.includes(t)) return;
 
+    const bytes = new Blob([encodeDrumPattern(pattern)], { type: "application/json" });
     t.drums = pattern;
-    t.buf = buf;
-    t.srcBytes = new Blob([encodeDrumPattern(pattern)], { type: "application/json" });
-    /* 尺が変わるので、トリムとフェードは掛け直しになる（黙って範囲外の値を
-       残すと再生とクリップ表示が食い違う）。 */
-    t.trimStart = 0;
-    t.trimEnd = buf.duration;
-    t.fadeIn = 0;
-    t.fadeOut = 0;
-    t.peaks = null;
+    t.srcBytes = bytes;
+    this.putPatternAudio(t, raw, buf);
     this.say(
       `${t.name} — ${pattern.bpm}BPM / ${pattern.bars}小節 / ${hits}発 / ${buf.duration.toFixed(2)}s（レンダー ${ms.toFixed(0)}ms）`,
     );
@@ -1001,62 +994,78 @@ export class Engine {
 
   /** 格子のマス目。押した瞬間に鳴りが変わるよう、その場で作り直す。 */
   toggleDrumStep(id: string, voice: DrumVoice, step: number): void {
-    const t = this.find(id);
-    if (!t?.drums) return;
-    const hits = { ...t.drums.hits, [voice]: [...t.drums.hits[voice]] };
-    hits[voice][step] = !hits[voice][step];
-    void this.renderDrumsInto(t, { ...t.drums, hits });
+    this.editDrums(id, pattern => {
+      const hits = { ...pattern.hits, [voice]: [...pattern.hits[voice]] };
+      hits[voice][step] = !hits[voice][step];
+      return { ...pattern, hits };
+    });
   }
 
   setDrumBpm(id: string, bpm: number): void {
-    const t = this.find(id);
-    if (!t?.drums) return;
-    void this.renderDrumsInto(t, { ...t.drums, bpm });
+    this.editDrums(id, pattern => ({ ...pattern, bpm }));
   }
 
   setDrumBars(id: string, bars: number): void {
-    const t = this.find(id);
-    if (!t?.drums) return;
-    void this.renderDrumsInto(t, { ...t.drums, bars });
+    this.editDrums(id, pattern => ({ ...pattern, bars }));
   }
 
   /** プリセットで格子を置き換える。BPM と小節数は今の値を引き継ぐ。 */
   applyDrumPreset(id: string, preset: PresetId): void {
-    const t = this.find(id);
-    if (!t?.drums) return;
-    void this.renderDrumsInto(t, { ...t.drums, hits: presetHits(preset) });
+    this.editDrums(id, pattern => ({ ...pattern, hits: presetHits(preset) }));
   }
 
-  /* ── ピアノロール（#55） ───────────────────────────────────────────── */
+  private editDrums(id: string, update: (pattern: DrumPattern) => DrumPattern): void {
+    const t = this.find(id);
+    if (t?.drums) this.schedulePatternChanges(t, this.pendingDrumChanges, () => t.drums, update, p => this.renderDrumsInto(t, p));
+  }
 
-  private queueRollEdit(t: Track, edit: () => Promise<void>): Promise<void> {
-    const previous = this.rollEdits.get(t) ?? Promise.resolve();
+  private queuePatternEdit(t: Track, edit: () => Promise<void>): Promise<void> {
+    const previous = this.patternEdits.get(t) ?? Promise.resolve();
     const next = previous.then(async () => {
       if (this.tracks.includes(t)) await edit();
     }).catch((err: unknown) => {
       if (this.tracks.includes(t)) this.say(`${t.name} の編集に失敗しました（${err instanceof Error ? err.message : String(err)}）`);
     }).finally(() => {
-      if (this.rollEdits.get(t) === next) this.rollEdits.delete(t);
+      if (this.patternEdits.get(t) === next) this.patternEdits.delete(t);
     });
-    this.rollEdits.set(t, next);
+    this.patternEdits.set(t, next);
     return next;
   }
 
-  private editRoll(id: string, update: (roll: RollPattern) => RollPattern): void {
-    const t = this.find(id);
-    if (!t?.roll) return;
-    const pending = this.pendingRollChanges.get(t);
+  private schedulePatternChanges<P>(
+    t: Track, batches: WeakMap<Track, Array<(p: P) => P>>, current: () => P | null,
+    update: (p: P) => P, render: (p: P) => Promise<void>,
+  ): void {
+    const pending = batches.get(t);
     if (pending) {
       pending.push(update);
       return;
     }
     // スライダー操作や連打は次のレンダー1回にまとめる。
     const changes = [update];
-    this.pendingRollChanges.set(t, changes);
-    void this.queueRollEdit(t, async () => {
-      if (this.pendingRollChanges.get(t) === changes) this.pendingRollChanges.delete(t);
-      if (t.roll) await this.renderRollInto(t, changes.reduce((roll, change) => change(roll), t.roll));
+    batches.set(t, changes);
+    void this.queuePatternEdit(t, async () => {
+      if (batches.get(t) === changes) batches.delete(t);
+      const base = current();
+      if (base !== null) await render(changes.reduce<P>((p, change) => change(p), base));
     });
+  }
+
+  private putPatternAudio(t: Track, raw: AudioBuffer, buf: AudioBuffer): void {
+    t.rawBuf = raw;
+    this.putStretched(t, buf, t.stretch, false);
+    // パターンの編集後は新しい尺全体を使う。
+    t.trimStart = 0;
+    t.trimEnd = buf.duration;
+    t.fadeIn = 0;
+    t.fadeOut = 0;
+  }
+
+  /* ── ピアノロール（#55） ───────────────────────────────────────────── */
+
+  private editRoll(id: string, update: (roll: RollPattern) => RollPattern): void {
+    const t = this.find(id);
+    if (t?.roll) this.schedulePatternChanges(t, this.pendingRollChanges, () => t.roll, update, p => this.renderRollInto(t, p));
   }
 
   /**
@@ -1077,13 +1086,7 @@ export class Engine {
     const bytes = new Blob([encodeRoll(currentRoll)], { type: "application/json" });
     t.roll = currentRoll;
     t.srcBytes = bytes;
-    t.rawBuf = r.buf;
-    this.putStretched(t, buf, t.stretch, false);
-    /* 尺が変わるのでトリムとフェードは掛け直し（ドラムと同じ理由）。 */
-    t.trimStart = 0;
-    t.trimEnd = buf.duration;
-    t.fadeIn = 0;
-    t.fadeOut = 0;
+    this.putPatternAudio(t, r.buf, buf);
     this.say(
       `${t.name} — ${roll.bpm}BPM / ${roll.bars}小節 / ${roll.notes.length}音 / ${buf.duration.toFixed(2)}s（レンダー ${r.ms.toFixed(0)}ms）`,
     );
@@ -1778,7 +1781,7 @@ export class Engine {
       this.mixPlans.check(revision);
     };
     const idle = () => {
-      const busy = this.tracks.find(t => ids.includes(t.id) && (this.stretching.has(t.id) || this.rollEdits.has(t)));
+      const busy = this.tracks.find(t => ids.includes(t.id) && (this.stretching.has(t.id) || this.patternEdits.has(t)));
       if (busy) throw new Error(busy.name + " の編集が完了してから試してください。");
     };
     idle();
@@ -1812,9 +1815,10 @@ export class Engine {
   async setStretch(id: string, params: StretchParams): Promise<void> {
     const t = this.find(id);
     if (!t) return;
-    if (t.roll) {
+    if (t.roll || t.drums) {
       this.pendingRollChanges.delete(t);
-      return this.queueRollEdit(t, () => this.stretchTrack(t, params));
+      this.pendingDrumChanges.delete(t);
+      return this.queuePatternEdit(t, () => this.stretchTrack(t, params));
     }
     return this.stretchTrack(t, params);
   }
