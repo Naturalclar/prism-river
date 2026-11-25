@@ -184,8 +184,9 @@ export class Engine {
   private stretching = new Set<string>();
   private stretchGen = new Map<string, number>();
   private rollCount = 0;
-  /** 打ち込みの再レンダーも非同期なので、ドラムと同じく世代を持つ。 */
-  private rollGen = 0;
+  /** 同じ打ち込みトラックのノート編集とTSを入力順に適用する。 */
+  private rollEdits = new WeakMap<Track, Promise<void>>();
+  private pendingRollChanges = new WeakMap<Track, Array<(roll: RollPattern) => RollPattern>>();
   /** ドラムの再レンダーは非同期なので、古い結果で上書きしないための世代。 */
   private drumGen = 0;
   private auditionSrc: AudioBufferSourceNode | null = null;
@@ -1028,30 +1029,63 @@ export class Engine {
 
   /* ── ピアノロール（#55） ───────────────────────────────────────────── */
 
+  private queueRollEdit(t: Track, edit: () => Promise<void>): Promise<void> {
+    const previous = this.rollEdits.get(t) ?? Promise.resolve();
+    const next = previous.then(async () => {
+      if (this.tracks.includes(t)) await edit();
+    }).catch((err: unknown) => {
+      if (this.tracks.includes(t)) this.say(`${t.name} の編集に失敗しました（${err instanceof Error ? err.message : String(err)}）`);
+    }).finally(() => {
+      if (this.rollEdits.get(t) === next) this.rollEdits.delete(t);
+    });
+    this.rollEdits.set(t, next);
+    return next;
+  }
+
+  private editRoll(id: string, update: (roll: RollPattern) => RollPattern): void {
+    const t = this.find(id);
+    if (!t?.roll) return;
+    const pending = this.pendingRollChanges.get(t);
+    if (pending) {
+      pending.push(update);
+      return;
+    }
+    // スライダー操作や連打は次のレンダー1回にまとめる。
+    const changes = [update];
+    this.pendingRollChanges.set(t, changes);
+    void this.queueRollEdit(t, async () => {
+      if (this.pendingRollChanges.get(t) === changes) this.pendingRollChanges.delete(t);
+      if (t.roll) await this.renderRollInto(t, changes.reduce((roll, change) => change(roll), t.roll));
+    });
+  }
+
   /**
-   * ノート列から AudioBuffer を作ってトラックに載せ替える。追加も編集もここを通る。
+   * ノート列から AudioBuffer を作ってトラックに載せ替える。
    * 鳴らすのは読み込んだ MIDI と同じ内蔵シンセ（`toMidiSong` で開くだけ）なので、
    * レンダー側は1行も変えずに済む。
    */
   private async renderRollInto(t: Track, roll: RollPattern): Promise<void> {
     const ctx = this.audio();
     if (ctx.state === "suspended") await ctx.resume();
-    /* ドラムと同じく、連打で古いレンダーが後から返るのを防ぐ。 */
-    const gen = ++this.rollGen;
     const r = await renderMidi(toMidiSong(roll), ctx.sampleRate);
-    if (gen !== this.rollGen || !this.tracks.includes(t)) return;
+    if (!this.tracks.includes(t)) return;
+    const buf = t.stretch ? (await stretchInWorker(ctx, r.buf, t.stretch)).buf : r.buf;
+    if (!this.tracks.includes(t) || !t.roll) return;
 
-    t.roll = roll;
-    t.buf = r.buf;
-    t.srcBytes = new Blob([encodeRoll(roll)], { type: "application/json" });
+    // 表示オクターブは計算中も切り替えられる。
+    const currentRoll = { ...roll, octave: t.roll.octave };
+    const bytes = new Blob([encodeRoll(currentRoll)], { type: "application/json" });
+    t.roll = currentRoll;
+    t.srcBytes = bytes;
+    t.rawBuf = r.buf;
+    this.putStretched(t, buf, t.stretch, false);
     /* 尺が変わるのでトリムとフェードは掛け直し（ドラムと同じ理由）。 */
     t.trimStart = 0;
-    t.trimEnd = r.buf.duration;
+    t.trimEnd = buf.duration;
     t.fadeIn = 0;
     t.fadeOut = 0;
-    t.peaks = null;
     this.say(
-      `${t.name} — ${roll.bpm}BPM / ${roll.bars}小節 / ${roll.notes.length}音 / ${r.buf.duration.toFixed(2)}s（レンダー ${r.ms.toFixed(0)}ms）`,
+      `${t.name} — ${roll.bpm}BPM / ${roll.bars}小節 / ${roll.notes.length}音 / ${buf.duration.toFixed(2)}s（レンダー ${r.ms.toFixed(0)}ms）`,
     );
     this.rebuildIfPlaying();
     this.touched();
@@ -1090,27 +1124,20 @@ export class Engine {
 
   /** 格子のマス目。置く / もう一度押すと外す。 */
   toggleRollNote(id: string, step: number, midi: number, len: NoteLength): void {
-    const t = this.find(id);
-    if (!t?.roll) return;
-    void this.renderRollInto(t, { ...t.roll, notes: toggleNote(t.roll.notes, step, midi, len) });
+    this.editRoll(id, roll => ({ ...roll, notes: toggleNote(roll.notes, step, midi, len) }));
   }
 
   setRollBpm(id: string, bpm: number): void {
-    const t = this.find(id);
-    if (!t?.roll) return;
-    void this.renderRollInto(t, { ...t.roll, bpm });
+    this.editRoll(id, roll => ({ ...roll, bpm }));
   }
 
   /** 小節数。ドラムと違い格子が横に伸びるので、縮めると外に出た音は消える。 */
   setRollBars(id: string, bars: number): void {
-    const t = this.find(id);
-    if (!t?.roll) return;
-    const total = bars * 16;
-    void this.renderRollInto(t, {
-      ...t.roll,
+    this.editRoll(id, roll => ({
+      ...roll,
       bars,
-      notes: t.roll.notes.filter((n) => n.step < total),
-    });
+      notes: roll.notes.filter(n => n.step < bars * 16),
+    }));
   }
 
   /** 表示するオクターブ。音そのものは動かさないので、レンダーし直さなくてよい。 */
@@ -1122,15 +1149,11 @@ export class Engine {
   }
 
   setRollProgram(id: string, program: number): void {
-    const t = this.find(id);
-    if (!t?.roll) return;
-    void this.renderRollInto(t, { ...t.roll, program });
+    this.editRoll(id, roll => ({ ...roll, program }));
   }
 
   clearRoll(id: string): void {
-    const t = this.find(id);
-    if (!t?.roll) return;
-    void this.renderRollInto(t, { ...t.roll, notes: [] });
+    this.editRoll(id, roll => ({ ...roll, notes: [] }));
   }
 
   /* ── 録音 ──────────────────────────────────────────────────────────── */
@@ -1755,8 +1778,8 @@ export class Engine {
       this.mixPlans.check(revision);
     };
     const idle = () => {
-      const busy = this.tracks.find(t => ids.includes(t.id) && this.stretching.has(t.id));
-      if (busy) throw new Error(busy.name + " のストレッチが完了してから試してください。");
+      const busy = this.tracks.find(t => ids.includes(t.id) && (this.stretching.has(t.id) || this.rollEdits.has(t)));
+      if (busy) throw new Error(busy.name + " の編集が完了してから試してください。");
     };
     idle();
     const { candidate, before, after } = await prepareGroupPitch(this.audio(), this.tracks, ids, delta, signal, check);
@@ -1789,6 +1812,15 @@ export class Engine {
   async setStretch(id: string, params: StretchParams): Promise<void> {
     const t = this.find(id);
     if (!t) return;
+    if (t.roll) {
+      this.pendingRollChanges.delete(t);
+      return this.queueRollEdit(t, () => this.stretchTrack(t, params));
+    }
+    return this.stretchTrack(t, params);
+  }
+
+  private async stretchTrack(t: Track, params: StretchParams): Promise<void> {
+    const id = t.id;
     const next = normalizeStretch(params);
     const cur = t.stretch ?? { tempo: 1, semitones: 0 };
     if (next.tempo === cur.tempo && next.semitones === cur.semitones) return;
