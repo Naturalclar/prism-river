@@ -2,6 +2,7 @@ import type { CSSProperties } from "react";
 import { engine } from "../audio/instance";
 import { BUS_IDS, BUS_INFO, type TrackView } from "../audio/engine";
 import { panLabel } from "../lib/time";
+import { semitoneLabel } from "../lib/stretch";
 
 export function TrackHead({
   t,
@@ -16,6 +17,7 @@ export function TrackHead({
   rollOpen: boolean;
   stretchOpen: boolean;
 }) {
+  const semitones = t.stretch?.semitones ?? 0;
   return (
     <div
       className={`head${t.selected ? " selected" : ""}`}
@@ -60,13 +62,14 @@ export function TrackHead({
           FX
         </button>
         <button
-          className="tog"
+          className="tog transpose-toggle"
           aria-pressed={stretchOpen}
-          title="タイムストレッチ (テンポ / ピッチ)"
-          aria-label={`${t.name} のストレッチ`}
+          title={`移調 ${semitoneLabel(semitones)} 半音・テンポ調整`}
+          aria-label={`${t.name} の移調・テンポ`}
+          aria-description={`現在 ${semitoneLabel(semitones)} 半音`}
           onClick={() => engine.toggleStretchPanel(t.id)}
         >
-          TS
+          移調{semitones !== 0 && ` ${semitoneLabel(semitones)}`}
         </button>
         {/* ドラムトラックだけ格子を開き直せるようにする（#54）。 */}
         {t.drums && (

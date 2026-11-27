@@ -5,6 +5,7 @@ import {
   NO_STRETCH,
   SEMITONE_MAX,
   SEMITONE_MIN,
+  semitoneLabel,
   TEMPO_MAX,
   TEMPO_MIN,
   type StretchParams,
@@ -13,10 +14,8 @@ import {
 /** よく使う倍率。練習用に遅くするのが主な用途なので、遅い側を厚めに置く。 */
 const TEMPO_PRESETS = [0.5, 0.75, 0.9, 1, 1.25, 1.5];
 
-const semiLabel = (n: number) => (n === 0 ? "±0" : `${n > 0 ? "+" : ""}${n}`);
-
 /**
- * ヘッダの TS ボタンで開くタイムストレッチのパネル（#25）。
+ * ヘッダの移調ボタンで開くタイムストレッチのパネル（#25）。
  *
  * 掛け直しはそのつど WASM（Rubber Band）を回すオフライン処理なので、
  * スライダーは `onChange`（離したとき）で確定させる。`onInput` で追うと
@@ -33,7 +32,7 @@ export function StretchPanel({ snap }: { snap: Snapshot }) {
     <div className="fxpanel stretchpanel" data-testid="stretchpanel">
       <div className="fx-top">
         <b style={{ color: t.color }}>{t.name}</b>
-        <span>Time / Pitch</span>
+        <span>移調・テンポ</span>
         <button
           className="tog"
           aria-label="ストレッチを閉じる"
@@ -75,7 +74,7 @@ export function StretchPanel({ snap }: { snap: Snapshot }) {
       </div>
 
       <div className="head-pot">
-        <span>PITCH</span>
+        <span>移調</span>
         <input
           type="range"
           min={SEMITONE_MIN}
@@ -87,10 +86,17 @@ export function StretchPanel({ snap }: { snap: Snapshot }) {
           aria-label={`${t.name} のピッチ`}
           onChange={(e) => set({ semitones: e.currentTarget.valueAsNumber })}
         />
-        <em data-testid="stretch-pitch-val">{semiLabel(cur.semitones)} 半音</em>
+        <em data-testid="stretch-pitch-val">{semitoneLabel(cur.semitones)} 半音</em>
       </div>
 
       <div className="seg-row">
+        <button
+          className="ghost"
+          disabled={t.stretching || cur.semitones === 0}
+          onClick={() => set({ semitones: 0 })}
+        >
+          移調を0に戻す
+        </button>
         <button
           className="ghost"
           disabled={t.stretching}

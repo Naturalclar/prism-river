@@ -132,7 +132,7 @@ test("個別TS後のドラムは最新の格子を使い、再編集と復元で
   await page.getByRole("button", { name: "ドラムを追加" }).click();
   await page.getByTestId("drum-preset-empty").click();
   await expect(page.getByTestId("drum-kick-0")).toHaveAttribute("aria-pressed", "false");
-  await page.getByRole("button", { name: "ドラム 1 のストレッチ" }).click();
+  await page.getByRole("button", { name: "ドラム 1 の移調・テンポ" }).click();
   await page.getByTestId("stretch-pitch").press("ArrowRight");
   await expect(page.getByTestId("stretch-pitch-val")).toHaveText("+1 半音");
   async function wav() {
