@@ -22,6 +22,11 @@ export const TEMPO_MAX = 2;
 export const SEMITONE_MIN = -12;
 export const SEMITONE_MAX = 12;
 
+export function semitoneLabel(semitones: number): string {
+  if (semitones === 0) return "±0";
+  return semitones > 0 ? `+${semitones}` : String(semitones);
+}
+
 export type StretchParams = {
   /** 再生速度の倍率。0.5 なら半分の速さ＝尺は2倍。 */
   tempo: number;

@@ -7,9 +7,9 @@ import { expect, load, makeTone, test, wavWindowHz } from "./helpers";
  * 何が違うのかがここにしか出ないので、書き出した WAV の周波数まで見る。
  */
 
-/** TS パネルを開く。 */
+/** トラックの移調・テンポパネルを開く。 */
 async function openPanel(page: Page, name: string) {
-  await page.getByRole("button", { name: `${name} のストレッチ`, exact: true }).click();
+  await page.getByRole("button", { name: `${name} の移調・テンポ`, exact: true }).click();
   await expect(page.getByTestId("stretchpanel")).toBeVisible();
 }
 
@@ -157,4 +157,10 @@ test("複製したトラックは元音源から掛け直し、保存後も移�
   expect(wavWindowHz(await exportWav(page), 3.5, 4.5)).toBe(hz);
   await openPanel(page, "source");
   await expect(page.getByTestId("stretch-pitch-val")).toHaveText("+12 半音");
+  await expect(page.getByRole("button", { name: "source の移調・テンポ", exact: true })).toHaveText("移調 +12");
+  await page.getByRole("button", { name: "移調を0に戻す" }).click();
+  await expect(page.getByTestId("stretch-pitch-val")).toHaveText("±0 半音");
+  await expect(page.getByTestId("stretch-tempo-val")).toHaveText("0.50x");
+  await openPanel(page, "source のコピー");
+  await expect(page.getByTestId("stretch-pitch-val")).toHaveText("+11 半音");
 });

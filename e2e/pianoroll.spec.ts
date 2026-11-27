@@ -152,7 +152,7 @@ test("最新のノート列を移調し、再編集・復元後も同じWAVに�
   await page.getByRole("button", { name: "打ち込みを追加" }).click();
   await putC4(page, 0);
   await page.getByRole("button", { name: "ピアノロールを閉じる" }).click();
-  await page.getByRole("button", { name: "打ち込み 1 のストレッチ" }).click();
+  await page.getByRole("button", { name: "打ち込み 1 の移調・テンポ" }).click();
   await page.getByTestId("stretch-pitch").press("End");
   await expect(page.getByTestId("stretch-pitch-val")).toHaveText("+12 半音");
   const first = await exportMix(page);
@@ -183,7 +183,7 @@ test("最新のノート列を移調し、再編集・復元後も同じWAVに�
   await page.reload();
   await expect(page.getByTestId("track-head")).toHaveCount(1);
   expect(readFileSync(await exportMix(page)).equals(readFileSync(edited))).toBe(true);
-  await page.getByRole("button", { name: "打ち込み 1 のストレッチ" }).click();
+  await page.getByRole("button", { name: "打ち込み 1 の移調・テンポ" }).click();
   await page.getByTestId("stretch-reset").click();
   await expect(page.locator(".clock i")).toHaveText("/ 00:02.00");
   const reset = await exportMix(page);
@@ -195,7 +195,7 @@ test("最新のノート列を移調し、再編集・復元後も同じWAVに�
 test("移調中の編集は順に反映し、再計算失敗後も元の音から編集を続けられる", async ({ page }) => {
   await page.getByRole("button", { name: "打ち込みを追加" }).click();
   await putC4(page, 0);
-  await page.getByRole("button", { name: "打ち込み 1 のストレッチ" }).click();
+  await page.getByRole("button", { name: "打ち込み 1 の移調・テンポ" }).click();
   await page.evaluate(() => {
     const send = Worker.prototype.postMessage;
     let count = 0;
@@ -229,7 +229,7 @@ for (const width of [1450, 390]) {
   test(`TSとピアノロールを同時にクリックできる（${width}px）`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await page.getByRole("button", { name: "打ち込みを追加" }).click();
-    await page.getByRole("button", { name: "打ち込み 1 のストレッチ" }).click();
+    await page.getByRole("button", { name: "打ち込み 1 の移調・テンポ" }).click();
     await page.getByTestId("stretch-tempo-0.5").click();
     await expect(page.getByTestId("stretch-tempo-val")).toHaveText("0.50x");
     await putC4(page, 4);

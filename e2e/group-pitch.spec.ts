@@ -51,7 +51,7 @@ test("2本だけ相対移調し、原曲・候補、Undo、WAV、再読み込み
   await page.mouse.down();
   await page.mouse.move(clip.x + 39, y, { steps: 5 });
   await page.mouse.up();
-  await button(page, "keys のストレッチ").click();
+  await button(page, "keys の移調・テンポ").click();
   await page.getByTestId("stretch-tempo-0.75").click();
   await expect(page.getByTestId("stretch-tempo-val")).toHaveText("0.75x");
   await page.getByTestId("stretch-pitch").focus();
@@ -110,7 +110,7 @@ test("2本だけ相対移調し、原曲・候補、Undo、WAV、再読み込み
 
 test("2本目の計算失敗・計算中のキャンセルで変更を残さない", async ({ page }) => {
   await load(page, [makeTone("bass.wav", 220), makeTone("keys.wav", 440)]);
-  await button(page, "bass のストレッチ").click();
+  await button(page, "bass の移調・テンポ").click();
   await button(page, "まとめて移調").click();
   await page.getByRole("checkbox", { name: "bass" }).check();
   await page.getByRole("checkbox", { name: "keys" }).check();
